@@ -1,0 +1,166 @@
+<div class="weibo-card">
+  <div class="card-header">
+    <img class="avatar" src="{{ post.user_avatar }}" alt="avatar" onerror="this.style.display='none'">
+    <div class="user-info">
+      <span class="username">
+        {{ post.user_name }}
+        {# F3 v1.1.2：蓝 V 标（verified 字段为真时显示） #}
+        {% if post.verified %}
+          <svg class="verified-icon" viewBox="0 0 16 16" aria-label="认证用户">
+            <path fill="#1e90ff" d="M8 0L9.6 1.5l2.1-1L12.6 2.6 14.7 3.7l-1 2.1L15 8l-1.5 1.6 1 2.1-2.1 1.1L11.6 14.6 10.5 16 8 14.5 5.5 16l-1.1-1.4L2.4 12.8l1-2.1L1 8l1.5-1.6-1-2.1L3.6 3.1 1.5 2l2.1-.5L4.4 0l2.1 1.1L8 0z"/>
+            <path fill="#fff" d="M4.5 8.2l2.4 2.4 4.6-4.8-.9-.9-3.7 3.9-1.5-1.5z"/>
+          </svg>
+        {% endif %}
+        {# F3 v1.1.2：性别图标（m=男/f=女） #}
+        {% if post.gender == 'f' %}<span class="gender-female" title="女">♀</span>
+        {% elif post.gender == 'm' %}<span class="gender-male" title="男">♂</span>{% endif %}
+      </span>
+      {% if post.source %}
+        <span class="source">{{ post.source }}</span>
+      {% endif %}
+    </div>
+    <span class="time">{{ post.created_at.strftime('%Y-%m-%d %H:%M') if post.created_at else '' }}</span>
+  </div>
+
+  <div class="card-body">
+    <div class="text">{{ post.text | e | replace('\n', '<br>') }}</div>
+
+    {% if post.location %}
+      <div class="location">📍 {{ post.location }}</div>
+    {% endif %}
+
+    {% if post.media %}
+      <div class="media-grid" data-media-count="{{ post.media | length }}">
+        {% for m in post.media %}
+          {% if m.type.value == 'image' %}
+            <div class="media-item image-item">
+              <img src="{{ m.local_path or m.thumbnail or m.url }}" alt="图片"
+                   loading="lazy"
+                   onclick="window.open(this.src)">
+            </div>
+
+          {% elif m.type.value == 'video' %}
+            <div class="media-item video-item">
+              {% set cover_src = m.video_cover or m.thumbnail or '' %}
+              {% if cover_src %}
+                <img src="{{ cover_src }}" alt="视频封面" loading="lazy">
+              {% else %}
+                <div class="video-placeholder">🎬 视频</div>
+              {% endif %}
+              <div class="play-icon">▶</div>
+              {% if m.duration %}
+                <span class="duration-badge">{{ '%d:%02d' | format(m.duration // 60, m.duration % 60) }}</span>
+              {% endif %}
+              {% if m.local_path %}
+                <div class="video-link-row">
+                  <a href="{{ m.local_path }}" class="video-link">📹 查看视频</a>
+                </div>
+              {% endif %}
+            </div>
+
+          {% elif m.type.value == 'live_photo' %}
+            <div class="media-item live-photo-item">
+              {% set live_cover = m.local_thumb or m.video_cover or m.thumbnail or '' %}
+              {% if live_cover %}
+                <img src="{{ live_cover }}" alt="实况照片" loading="lazy">
+              {% else %}
+                <div class="video-placeholder">📸 Live</div>
+              {% endif %}
+              <div class="live-badge">LIVE</div>
+              {% if m.duration %}
+                <span class="duration-badge">{{ '%d:%02d' | format(m.duration // 60, m.duration % 60) }}</span>
+              {% endif %}
+              {% if m.local_path %}
+                <div class="video-link-row">
+                  <a href="{{ m.local_path }}" class="video-link">📹 查看实况视频</a>
+                </div>
+              {% endif %}
+            </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {% if post.link_card %}
+      {% set card_image = post.link_card.local_image or post.link_card.image_url %}
+      <a class="link-card" href="{{ post.link_card.url or post.link_card.original_url }}">
+        {% if card_image %}<img class="link-card-image" src="{{ card_image }}" alt="">{% endif %}
+        <span class="link-card-body">
+          <strong>{{ post.link_card.title }}</strong>
+          {% if post.link_card.description %}<small>{{ post.link_card.description }}</small>{% endif %}
+        </span>
+      </a>
+    {% endif %}
+
+    {% if post.retweeted %}
+      <div class="retweeted-card">
+        <div class="retweeted-header">
+          {% if not post.is_original %}<span class="retweet-label">转发</span>{% endif %}
+          <span class="retweeted-username">@{{ post.retweeted.user_name or '转发' }}</span>
+        </div>
+        <div class="retweeted-text">{{ post.retweeted.text | e | replace('\n', '<br>') }}</div>
+        {% if post.retweeted.media %}
+          <div class="retweeted-media">
+            {% for m in post.retweeted.media %}
+              {% set img_src = m.local_thumb or m.video_cover or m.local_path or m.thumbnail or m.url or '' %}
+              {% if img_src %}
+                <img src="{{ img_src }}" alt="" loading="lazy" class="retweeted-img">
+              {% endif %}
+            {% endfor %}
+          </div>
+        {% endif %}
+        {% if post.retweeted.link_card %}
+          {% set retweeted_card_image = post.retweeted.link_card.local_image or post.retweeted.link_card.image_url %}
+          <a class="link-card" href="{{ post.retweeted.link_card.url or post.retweeted.link_card.original_url }}">
+            {% if retweeted_card_image %}<img class="link-card-image" src="{{ retweeted_card_image }}" alt="">{% endif %}
+            <span class="link-card-body">
+              <strong>{{ post.retweeted.link_card.title }}</strong>
+              {% if post.retweeted.link_card.description %}<small>{{ post.retweeted.link_card.description }}</small>{% endif %}
+            </span>
+          </a>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="card-footer">
+    {# F3 v1.1.2：互动栏用 inline SVG 替换 emoji（emoji 跨平台字体差） #}
+    <div class="actions-bar">
+      <span class="action-item">
+        <svg viewBox="0 0 24 24"><path d="M7 7h11v3l5-4-5-4v3H5v6h2V7zm10 10H7v-3l-5 4 5 4v-3h13v-6h-2v4z"/></svg>
+        转发{{ ' ' ~ post.reposts_count if post.reposts_count }}
+      </span>
+      <span class="action-item">
+        <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        评论{{ ' ' ~ post.comments_count if post.comments_count }}
+      </span>
+      <span class="action-item">
+        <svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+        点赞{{ ' ' ~ post.likes_count if post.likes_count }}
+      </span>
+    </div>
+  </div>
+
+  {% if post.comments %}
+    <div class="comments-section">
+      <div class="comments-title">评论（{{ post.comments | length }}）</div>
+      {% for c in post.comments %}
+        <div class="comment-item {% if c.is_blogger %}comment-blogger{% endif %}">
+          <img class="comment-avatar" src="{{ c.user_avatar }}" alt=""
+               onerror="this.style.display='none'">
+          <div class="comment-body">
+            <div class="comment-user">
+              {{ c.user_name }}
+              {% if c.is_blogger %}<span class="blogger-tag">博主</span>{% endif %}
+            </div>
+            <div class="comment-text">{{ c.text | e }}</div>
+            <div class="comment-footer">
+              <span class="comment-time">{{ c.created_at }}</span>
+              <span class="comment-likes">❤️ {{ c.like_counts }}</span>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+</div>

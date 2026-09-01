@@ -1,0 +1,304 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="steps">
+  <!-- 首屏主操作：搜索博主 / 粘贴链接 -->
+  <section class="focused-workflow" id="step-2">
+    <div class="workflow-heading">
+      <p class="workflow-eyebrow">微博主页归档</p>
+      <h1 class="workflow-title">备份任意博主的微博</h1>
+      <p class="workflow-description">输入博主昵称搜索，或粘贴微博主页链接。</p>
+    </div>
+    <div class="url-row">
+      <input type="text" id="url-input" class="text-input" placeholder="输入博主昵称搜索，或粘贴主页链接 / 分享文本" />
+      <button class="btn btn-primary" id="btn-search-blogger">搜索</button>
+    </div>
+
+    <!-- 博主搜索结果 -->
+    <ul id="blogger-results" class="blogger-results" hidden></ul>
+
+    <!-- 用户名片 -->
+    <div id="user-card" class="user-card" hidden>
+      <img id="user-avatar" class="user-avatar" alt="" />
+      <div class="user-info">
+        <div class="user-name" id="user-name"></div>
+        <div class="user-stats">
+          <span><strong id="user-posts">0</strong> 微博</span>
+          <span><strong id="user-followers">0</strong> 粉丝</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 预览列表 -->
+    <div id="preview-section" hidden>
+      <div class="preview-header">
+        <span>最近 20 条（点击勾选要提取的）</span>
+        <label class="check-all">
+          <input type="checkbox" id="check-all" /> 全选
+        </label>
+      </div>
+      <ul id="preview-list" class="preview-list"></ul>
+    </div>
+  </section>
+
+  <!-- v1.1.6 历史记录面板 + 全局搜索 -->
+  <aside class="history-panel" id="history-panel" hidden>
+    <header class="history-header">
+      <h3>📚 历史记录</h3>
+      <button class="icon-btn-sm" id="history-close">×</button>
+    </header>
+    <div class="history-folder">
+      <button class="btn btn-secondary btn-sm" id="btn-pick-history-folder">📁 选目录</button>
+      <span class="hint" id="history-folder-path">未选目录</span>
+    </div>
+    <div class="history-search">
+      <input type="text" id="search-input" class="text-input" placeholder="🔍 搜微博书内容（v1.1.6）" />
+      <button class="btn btn-primary btn-sm" id="btn-search">搜</button>
+    </div>
+    <div class="history-list" id="history-list">
+      <p class="hint">选目录后这里显示历史微博书</p>
+    </div>
+    <div class="search-results" id="search-results" hidden>
+      <h4>🔍 搜索结果</h4>
+      <ul id="search-list"></ul>
+    </div>
+  </aside>
+  <div class="backup-self-block" id="backup-self-block" hidden>
+    <button class="btn btn-primary btn-lg" id="btn-backup-self">
+      📥 一键备份本人微博（持续增量）
+    </button>
+    <p class="hint">登录后可用 · 自动跳过已备份的 BID · 可换电脑/换账号续备</p>
+  </div>
+
+  <div class="archive-folder-overlay" id="archive-folder-decision" hidden>
+    <section class="archive-folder-modal" role="dialog" aria-modal="true" aria-labelledby="archive-folder-decision-title">
+      <header class="archive-folder-header">
+        <div>
+          <p class="workflow-eyebrow" id="archive-folder-eyebrow">本人微博书</p>
+          <h2 id="archive-folder-decision-title">确认备份目录</h2>
+        </div>
+        <button class="icon-btn-sm" id="archive-folder-close" type="button" aria-label="关闭">×</button>
+      </header>
+
+      <div class="archive-folder-summary" id="archive-folder-summary">
+        <div><span>账号</span><strong id="archive-folder-account">—</strong></div>
+        <div><span>累计微博</span><strong id="archive-folder-total">—</strong></div>
+        <div><span>上次成功更新</span><strong id="archive-folder-last-sync">—</strong></div>
+      </div>
+      <p class="archive-folder-warning" id="archive-folder-warning" hidden></p>
+      <div class="archive-folder-path-block">
+        <span>所选目录</span>
+        <code id="archive-folder-path"></code>
+      </div>
+
+      <fieldset class="archive-pacing-options">
+        <legend>更新节奏</legend>
+        <label><input type="radio" name="archive-pacing-mode" value="standard" checked><span><strong>标准速度</strong><small>保持现有请求节奏</small></span></label>
+        <label><input type="radio" name="archive-pacing-mode" value="low_2_3_hours"><span><strong>约 2～3 小时</strong><small>低强度模式</small></span></label>
+        <label><input type="radio" name="archive-pacing-mode" value="low_4_6_hours"><span><strong>约 4～6 小时</strong><small>低强度模式</small></span></label>
+        <label><input type="radio" name="archive-pacing-mode" value="low_8_12_hours"><span><strong>约 8～12 小时</strong><small>低强度模式</small></span></label>
+      </fieldset>
+      <label class="archive-keep-awake-option">
+        <input type="checkbox" id="archive-keep-awake" disabled>
+        <span>接通电源时保持系统清醒，允许显示器关闭</span>
+      </label>
+      <p class="archive-pacing-disclaimer">低强度模式用于降低短时间请求密度和本机资源峰值，不保证避免账号限制。目标区间不是完成时间承诺。</p>
+
+      <footer class="archive-folder-actions">
+        <button class="btn btn-primary" id="archive-action-create" data-archive-mode="create" type="button" hidden>创建新微博书</button>
+        <button class="btn btn-primary" id="archive-action-incremental" data-archive-mode="incremental" type="button">新增备份（推荐）</button>
+        <button class="btn btn-primary" id="archive-action-following" type="button">更新关注资料</button>
+        <button class="btn btn-danger-soft" id="archive-action-rebuild" data-archive-mode="rebuild" type="button">重新全部备份</button>
+        <button class="btn btn-primary" id="archive-action-create-subfolder" type="button" hidden>在此创建微博书</button>
+        <button class="btn btn-secondary" id="archive-action-reselect" type="button">取消并重新选择</button>
+      </footer>
+    </section>
+  </div>
+
+  <div class="recovery-task-overlay" id="recovery-task-overlay" hidden>
+    <section class="recovery-task-modal" role="dialog" aria-modal="true" aria-labelledby="recovery-task-title">
+      <header class="recovery-task-header">
+        <span class="recovery-task-mark" aria-hidden="true">↺</span>
+        <div>
+          <p class="workflow-eyebrow">本地恢复点</p>
+          <h2 id="recovery-task-title">发现一个未完成任务</h2>
+        </div>
+      </header>
+      <p class="recovery-task-intro">应用已保留上次安全保存的内容。在你选择“继续任务”前，不会自动联网。</p>
+      <div class="recovery-task-summary" id="recovery-task-summary" aria-live="polite"></div>
+      <p class="recovery-task-intro" id="recovery-task-nonrecoverable" hidden>本次错误不能继续任务。你可以查看已保存内容，或放弃本次未完成部分。</p>
+      <footer class="recovery-task-actions">
+        <button class="btn btn-primary" id="recovery-task-resume" type="button">继续任务</button>
+        <button class="btn btn-secondary" id="recovery-task-later" type="button">稍后处理</button>
+        <button class="btn btn-secondary" id="recovery-task-open-saved" type="button">查看已保存内容</button>
+        <button class="btn btn-danger-soft" id="recovery-task-abandon" type="button">放弃未完成部分</button>
+      </footer>
+    </section>
+  </div>
+
+  <div class="close-protection-overlay" id="close-protection-overlay" hidden>
+    <section class="close-protection-modal" role="dialog" aria-modal="true" aria-labelledby="close-protection-title">
+      <p class="workflow-eyebrow">任务仍在运行</p>
+      <h2 id="close-protection-title">关闭窗口会中断当前任务</h2>
+      <p>可以最小化窗口并继续运行，或等待任务到达最近的安全保存点后退出。</p>
+      <div class="close-protection-actions">
+        <button class="btn btn-primary" id="close-protection-minimize" type="button">最小化继续</button>
+        <button class="btn btn-secondary" id="close-protection-pause-exit" type="button">暂停后退出</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- v1.2.0 收口 A: 浏览器控制台面板（m.weibo.cn 拒绝 iframe，故控制台在主窗）已迁到右栏 browser_area block -->
+
+  <!-- 步骤 3：提取设置 + 立即提取 -->
+  <section class="step-card" id="step-3" hidden>
+    <header class="step-header">
+      <span class="step-num">3</span>
+      <h2 class="step-title">提取设置</h2>
+    </header>
+    <div class="settings-grid settings-grouped">
+      <label class="setting setting-full">
+        <span>保存范围</span>
+        <select id="set-scope">
+          <option value="manual" selected>预览后手动选择</option>
+          <option value="recent">最近 N 条</option>
+          <option value="date">日期范围</option>
+          <option value="all">全部微博</option>
+        </select>
+      </label>
+      <div class="setting setting-full main-scope-panel" data-main-scope-panel="manual">
+        <span>已选预览微博</span>
+        <small>从上方预览列表勾选；0 条时不能开始。</small>
+      </div>
+      <label class="setting setting-full main-scope-panel" data-main-scope-panel="recent" hidden>
+        <span>保存最近</span>
+        <div class="inline-number"><input type="number" id="set-max-posts" value="50" min="1" max="100000" /><span>条</span></div>
+      </label>
+      <div class="setting setting-full scope-date-grid main-scope-panel" data-main-scope-panel="date" hidden>
+        <label class="setting"><span>起始日期</span><input type="date" id="set-start-date" /></label>
+        <label class="setting"><span>结束日期</span><input type="date" id="set-end-date" /></label>
+      </div>
+      <div class="setting setting-full scope-all-warning main-scope-panel" data-main-scope-panel="all" hidden>
+        <strong>全部微博需要再次确认。</strong>
+        <small>总量未知时不显示虚假百分比。</small>
+      </div>
+      <label class="setting">
+        <span>图片质量</span>
+        <select id="set-quality">
+          <option value="large">原图</option>
+          <option value="original">超清</option>
+          <option value="mw1024">大图</option>
+          <option value="mw690">中等</option>
+        </select>
+      </label>
+      <label class="setting">
+        <span>评论条数</span>
+        <input type="number" id="set-comments-count" value="5" min="0" />
+      </label>
+      <label class="setting">
+        <span>评论类型</span>
+        <select id="set-comments-type">
+          <option value="hot">热评</option>
+          <option value="blogger">博主</option>
+          <option value="all">全部</option>
+        </select>
+      </label>
+      <label class="setting setting-full">
+        <span>输出格式</span>
+        <div class="format-row">
+          <label><input type="checkbox" name="fmt" value="md" checked> Markdown</label>
+          <label><input type="checkbox" name="fmt" value="pdf" checked> PDF</label>
+          <label><input type="checkbox" name="fmt" value="html"> HTML</label>
+          <label><input type="checkbox" name="fmt" value="json"> JSON</label>
+          <label><input type="checkbox" name="fmt" value="csv"> CSV</label>
+        </div>
+      </label>
+      <label class="setting setting-full switches">
+        <label class="switch"><input type="checkbox" id="sw-media" checked> 下载媒体</label>
+        <label class="switch"><input type="checkbox" id="sw-original"> 仅原创</label>
+        <label class="switch"><input type="checkbox" id="sw-favorites"> 收藏</label>
+        <label class="switch"><input type="checkbox" id="sw-comments"> 提取评论</label>
+      </label>
+    </div>
+    <button class="btn btn-primary btn-lg" id="btn-start">立即提取</button>
+  </section>
+
+  <!-- 进度 + 结果 -->
+  <section class="step-card" id="step-progress" hidden>
+    <section class="low-intensity-progress" id="low-intensity-progress" aria-live="polite" hidden>
+      <header>
+        <strong>低强度模式</strong>
+        <span id="low-intensity-mode">—</span>
+      </header>
+      <div class="low-intensity-status-row">
+        <span id="low-intensity-state">正在估算请求量</span>
+        <span id="low-intensity-next-wait">下次等待：—</span>
+      </div>
+      <div class="low-intensity-principles" aria-label="低强度模式说明">
+        <span>分散请求间隔</span>
+        <span>按请求类型分级</span>
+        <span>限流时暂停</span>
+        <span>阶段恢复点</span>
+      </div>
+      <p id="low-intensity-disclaimer">目标区间不是完成时间承诺</p>
+    </section>
+    <div class="progress-stage-card" id="progress-stage-card">
+      <ol class="progress-stage-list" aria-label="备份阶段">
+        <li data-progress-phase="identify"><span>识别账号</span></li>
+        <li data-progress-phase="extract"><span>抓取微博</span></li>
+        <li data-progress-phase="media"><span>下载媒体</span></li>
+        <li data-progress-phase="generate"><span>生成文件</span></li>
+        <li data-progress-phase="report"><span>写入报告</span></li>
+        <li data-progress-phase="complete"><span>完成</span></li>
+      </ol>
+      <div class="progress-stage-live">
+        <div>
+          <strong id="progress-stage-detail">准备中…</strong>
+          <span id="progress-stage-count">尚无计数</span>
+        </div>
+        <time id="progress-stage-elapsed">0.0 秒</time>
+      </div>
+      <div class="progress-stage-track is-indeterminate" id="progress-stage-track" aria-hidden="true"><span></span></div>
+    </div>
+    <div class="progress-section">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+      </div>
+      <div class="progress-text" id="progress-text">准备中...</div>
+    </div>
+    <button class="btn btn-secondary" id="btn-cancel-task" hidden>取消本次任务</button>
+    <div class="result-card" id="result-card" hidden>
+      <h3>生成完成</h3>
+      <ul class="result-list" id="result-list"></ul>
+      <button class="btn btn-secondary" id="btn-open-folder">📁 打开输出文件夹</button>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block browser_area %}
+<section class="browser-dock browser-glass" id="browser-panel">
+  <header class="browser-panel-header">
+    <h3>内置微博浏览器</h3>
+    <span class="badge badge-muted" id="browser-status">未打开</span>
+  </header>
+  <div class="browser-toolbar">
+    <div class="browser-location-row">
+      <button class="browser-tool-button" id="btn-browser-back" title="后退" aria-label="后退">‹</button>
+      <button class="browser-tool-button" id="btn-browser-forward" title="前进" aria-label="前进">›</button>
+      <button class="browser-tool-button" id="btn-browser-refresh" title="刷新" aria-label="刷新">↻</button>
+      <code class="browser-address" id="browser-current-url">https://m.weibo.cn/</code>
+    </div>
+    <div class="browser-action-row">
+      <button class="btn btn-secondary btn-sm" id="btn-browser-sync" title="保存内置浏览器登录状态">同步登录</button>
+      <button class="btn btn-secondary btn-sm" id="btn-browser-copy" title="复制当前微博链接到主区">复制</button>
+      <button class="btn btn-secondary btn-sm" id="btn-browser-close" title="收起内置浏览器">收起</button>
+    </div>
+  </div>
+  <div class="native-browser-slot" id="native-browser-slot" aria-label="微博网页内容"></div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/ws_client.js?v={{ version }}"></script>
+{% endblock %}

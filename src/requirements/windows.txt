@@ -1,0 +1,5 @@
+# Windows 历史构建入口
+-r common.txt
+pywebview==6.2.1
+pywin32==311
+comtypes==1.4.16

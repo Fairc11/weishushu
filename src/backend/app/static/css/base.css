@@ -1,0 +1,123 @@
+/* 生产前端基础层：reset、排版、表单与焦点。 */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+}
+
+html {
+  color-scheme: light;
+  background: var(--wb-bg);
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+body {
+  overflow: hidden;
+  color: var(--wb-text-1);
+  background: var(--wb-bg);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+               "Hiragino Sans GB", "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  letter-spacing: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition:
+    color var(--wb-motion-standard) var(--wb-ease),
+    background var(--wb-motion-standard) var(--wb-ease);
+}
+
+button,
+input,
+select,
+textarea {
+  color: inherit;
+  font: inherit;
+}
+
+button,
+label,
+select,
+input[type="checkbox"],
+input[type="radio"] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  margin: 0;
+}
+
+a {
+  color: var(--wb-brand-pressed);
+  text-underline-offset: 2px;
+}
+
+code,
+pre {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+::selection {
+  color: var(--wb-text-1);
+  background: var(--wb-brand-soft);
+}
+
+*:focus-visible {
+  outline: 2px solid var(--wb-brand);
+  outline-offset: 2px;
+}
+
+.workflow-eyebrow,
+.wb-eyebrow {
+  margin: 0;
+  color: var(--wb-text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.workflow-title,
+.wb-title {
+  margin: var(--wb-space-1) 0;
+  color: var(--wb-text-1);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.workflow-description,
+.wb-description {
+  margin: 0 0 var(--wb-space-5);
+  color: var(--wb-text-2);
+  font-size: 13px;
+}
+
+.hint,
+.wb-hint {
+  color: var(--wb-text-3);
+  font-size: 12px;
+}
+
+.wb-num,
+.user-stats strong,
+.progress-stage-count,
+.progress-stage-elapsed,
+.archive-folder-summary strong,
+.history-meta {
+  font-variant-numeric: tabular-nums;
+}

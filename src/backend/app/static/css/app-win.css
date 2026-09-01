@@ -1,0 +1,44 @@
+/* ============================================================
+   v2.0.0 阶段 4：Windows WebView2 专用兜底
+   仅在 platform == 'win32' 时通过 base.html 引入。
+   Mac 端不加载此文件，保持现代特性 + 时尚视觉。
+   ============================================================ */
+
+/* 高 DPI 字体抗锯齿 */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: auto;
+  text-rendering: optimizeLegibility;
+}
+
+/* Windows WebView2 滚动条细节（与 app.css 双写属性互补） */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(146, 137, 133, 0.55);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(146, 137, 133, 0.75);
+  background-clip: content-box;
+}
+
+/* 动画抖动修复：强制 GPU 层 */
+@keyframes ios-overlay-in {
+  from { opacity: 0; transform: translateZ(0) translateY(6px) scale(0.99); }
+  to { opacity: 1; transform: translateZ(0) translateY(0) scale(1); }
+}
+
+/* Windows 下输入框边框显式 solid（避免 WebView2 边框渲染异常） */
+.text-input,
+select,
+input[type="number"],
+input[type="date"] {
+  border-style: solid;
+}

@@ -1,0 +1,132 @@
+/* 微书薯主前端设计 token · 唯一事实源
+   方向：现代极简骨架 + ②级 macOS 立体质感
+   规格：docs/frontend-design/spec/00-design-language.md */
+
+:root,
+[data-theme="light"] {
+  /* 画布与表面 */
+  --wb-bg: #f2f1ef;
+  --wb-surface: #ffffff;
+  --wb-surface-subtle: #f5f5f5;
+  --wb-border: rgba(0, 0, 0, 0.06);
+  --wb-border-strong: rgba(0, 0, 0, 0.12);
+  /* 文本 */
+  --wb-text-1: #171717;
+  --wb-text-2: #525252;
+  --wb-text-3: #a3a3a3;
+  /* 品牌橙（用户指定，不可改） */
+  --wb-brand: #fa7d3c;
+  --wb-brand-pressed: #e8622a;
+  --wb-brand-soft: #fff3ec;
+  --wb-brand-gradient: linear-gradient(180deg, #ff8f52, #f9702c);
+  --wb-brand-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  --wb-brand-shadow: 0 2px 6px rgba(249, 111, 44, 0.35), 0 1px 2px rgba(0, 0, 0, 0.08);
+  --wb-brand-text-shadow: 0 1px 1px rgba(0, 0, 0, 0.1);
+  /* 状态色 */
+  --wb-success: #16a34a;
+  --wb-success-soft: #eef9f0;
+  --wb-success-edge: rgba(22, 163, 74, 0.2);
+  --wb-warning: #d97706;
+  --wb-warning-soft: #fdf6e7;
+  --wb-danger: #dc2626;
+  --wb-danger-soft: #fef2f2;
+  --wb-danger-edge: #fecaca;
+  /* 质感层（②级） */
+  --wb-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 6px 16px rgba(0, 0, 0, 0.06);
+  --wb-shadow-overlay: 0 8px 30px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
+  --wb-inset-input: inset 0 1.5px 3px rgba(0, 0, 0, 0.05);
+  --wb-focus-ring: 0 0 0 3px var(--wb-brand-soft);
+  --wb-glass-bg: rgba(255, 255, 255, 0.72);
+  --wb-glass-blur: saturate(140%) blur(18px);
+  --wb-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  /* 圆角 */
+  --wb-radius-badge: 6px;
+  --wb-radius-control: 8px;
+  --wb-radius-card: 10px;
+  --wb-radius-overlay: 14px;
+  --wb-radius-pill: 999px;
+  /* 间距（4 的倍数） */
+  --wb-space-1: 4px;
+  --wb-space-2: 8px;
+  --wb-space-3: 12px;
+  --wb-space-4: 16px;
+  --wb-space-5: 20px;
+  --wb-space-6: 24px;
+  --wb-space-8: 32px;
+  /* 动效 */
+  --wb-motion-fast: 120ms;
+  --wb-motion-standard: 200ms;
+  --wb-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* 遮罩与 Toast */
+  --wb-mask: rgba(0, 0, 0, 0.32);
+  --wb-toast-bg: #171717;
+  /* 品牌按钮上的文字色 */
+  --wb-on-brand: #ffffff;
+}
+
+[data-theme="dark"] {
+  --wb-bg: #141414;
+  --wb-surface: #1f1f1f;
+  --wb-surface-subtle: #262626;
+  --wb-border: rgba(255, 255, 255, 0.08);
+  --wb-border-strong: rgba(255, 255, 255, 0.14);
+  --wb-text-1: #f5f5f5;
+  --wb-text-2: #a3a3a3;
+  --wb-text-3: #737373;
+  --wb-brand: #ff8f52;
+  --wb-brand-pressed: #f06b2d;
+  --wb-brand-soft: #3a2417;
+  --wb-brand-gradient: linear-gradient(180deg, #ff9455, #ff8140);
+  --wb-brand-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  --wb-brand-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  --wb-brand-text-shadow: none;
+  --wb-success: #4ade80;
+  --wb-success-soft: #16271c;
+  --wb-success-edge: rgba(74, 222, 128, 0.25);
+  --wb-warning: #fbbf24;
+  --wb-warning-soft: #2c2210;
+  --wb-danger: #f87171;
+  --wb-danger-soft: #2e1a1a;
+  --wb-danger-edge: rgba(248, 113, 113, 0.3);
+  /* 深色：阴影减半、高光减弱 */
+  --wb-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2), 0 6px 16px rgba(0, 0, 0, 0.22);
+  --wb-shadow-overlay: 0 8px 30px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.3);
+  --wb-inset-input: inset 0 1.5px 3px rgba(0, 0, 0, 0.25);
+  --wb-focus-ring: 0 0 0 3px var(--wb-brand-soft);
+  --wb-glass-bg: rgba(31, 31, 31, 0.72);
+  --wb-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* 遮罩与 Toast */
+  --wb-mask: rgba(0, 0, 0, 0.5);
+  --wb-toast-bg: #f5f5f5;
+  /* 品牌按钮上的文字色 */
+  --wb-on-brand: #ffffff;
+}
+
+/* 无障碍：减弱透明度时去玻璃模糊，减弱动效时停动效 */
+@media (prefers-reduced-transparency: reduce) {
+  :root, [data-theme="light"], [data-theme="dark"] {
+    --wb-glass-blur: none;
+    --wb-glass-bg: var(--wb-surface);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root, [data-theme="light"], [data-theme="dark"] {
+    --wb-motion-fast: 0ms;
+    --wb-motion-standard: 0ms;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root, [data-theme="light"] {
+    --wb-border: rgba(0, 0, 0, 0.22);
+    --wb-border-strong: rgba(0, 0, 0, 0.42);
+    --wb-text-3: #737373;
+  }
+
+  [data-theme="dark"] {
+    --wb-border: rgba(255, 255, 255, 0.24);
+    --wb-border-strong: rgba(255, 255, 255, 0.42);
+    --wb-text-3: #a3a3a3;
+  }
+}

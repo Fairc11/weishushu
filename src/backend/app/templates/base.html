@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ app_name }} v{{ version }}</title>
+  <link rel="stylesheet" href="/static/css/tokens.css?v={{ version }}">
+  <link rel="stylesheet" href="/static/css/base.css?v={{ version }}">
+  <link rel="stylesheet" href="/static/css/shell.css?v={{ version }}">
+  <link rel="stylesheet" href="/static/css/components.css?v={{ version }}">
+  <link rel="stylesheet" href="/static/css/workflows.css?v={{ version }}">
+  <link rel="stylesheet" href="/static/css/responsive.css?v={{ version }}">
+  {% if platform == 'win32' %}
+  <link rel="stylesheet" href="/static/css/app-win.css?v={{ version }}">
+  {% endif %}
+</head>
+<body>
+  <header class="app-header" id="app-header">
+    <div class="brand">
+      <span class="logo-dot"></span>
+      <span class="brand-name">{{ app_name }}</span>
+      <span class="brand-version">v{{ version }}</span>
+    </div>
+    <div class="header-actions workflow-toolbar">
+      <div class="login-menu-wrap">
+        <button id="login-menu-toggle" class="login-status-control" type="button"
+                aria-expanded="false" aria-controls="login-menu" title="登录状态">
+          <span id="login-badge" class="badge badge-muted">检测中...</span>
+        </button>
+        <div id="login-menu" class="login-menu" hidden>
+          <button class="btn btn-primary" id="btn-qrcode" type="button">扫码登录</button>
+          <button class="btn btn-secondary" id="btn-chrome" type="button">Chrome 导入（开发中）</button>
+          <button class="btn btn-secondary" id="btn-logout" type="button" hidden>退出登录</button>
+        </div>
+      </div>
+      <button id="history-toggle" class="icon-btn" type="button"
+              aria-label="历史记录" title="历史记录">
+        📚
+      </button>
+      <button id="btn-browser" class="icon-btn" aria-label="浏览器" title="浏览器（开发中）">
+        🌐
+      </button>
+      <button id="theme-toggle" class="icon-btn" aria-label="切换主题" title="切换主题">
+        <span class="icon-light">☀</span>
+        <span class="icon-dark">☾</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="app-main app-split-view browser-console-hidden" id="app-main">
+    <section class="main-area" id="main-area">
+      {% block content %}{% endblock %}
+    </section>
+    <div class="splitter" id="splitter" role="separator" aria-orientation="vertical" aria-label="调整主区和内置浏览器宽度"></div>
+    <aside class="browser-area" id="browser-area" hidden>
+      {% block browser_area %}{% endblock %}
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <div id="log-panel" class="log-panel" hidden>
+    <div class="log-panel-header">
+      <span>实时日志</span>
+      <button id="log-close" class="icon-btn-sm" aria-label="关闭">×</button>
+    </div>
+    <pre id="log-content" class="log-content"></pre>
+  </div>
+
+  <div class="qrcode-login-overlay" id="qrcode-login-overlay" hidden>
+    <section class="qrcode-login-modal" role="dialog" aria-modal="true" aria-labelledby="qrcode-login-title">
+      <p class="workflow-eyebrow">本人微博归档</p>
+      <h2 id="qrcode-login-title">扫码登录</h2>
+      <p id="qrcode-login-message" class="qrcode-login-message" aria-live="polite">正在准备二维码</p>
+      <div class="qrcode-login-frame">
+        <img id="qrcode-login-image" alt="微博登录二维码" hidden />
+        <div id="qrcode-login-placeholder" class="qrcode-login-placeholder">正在连接微博…</div>
+      </div>
+      <p id="qrcode-login-remaining" class="qrcode-login-remaining"></p>
+      <p class="qrcode-login-help">请使用微博 App 扫一扫。登录成功后，本窗口会自动关闭。</p>
+      <footer class="qrcode-login-actions">
+        <button class="btn btn-primary" id="qrcode-login-retry" type="button" hidden>重新获取</button>
+        <button class="btn btn-secondary" id="qrcode-login-cancel" type="button">取消</button>
+      </footer>
+    </section>
+  </div>
+
+  <!-- v2.0.0：首启风险须知模态（强模态 + 滚动到底才可确认） -->
+  <div class="risk-modal-overlay" id="risk-modal-overlay" hidden>
+    <div class="risk-modal" role="dialog" aria-modal="true" aria-labelledby="risk-modal-title">
+      <h2 id="risk-modal-title">微书薯 v2.0.1 风险须知</h2>
+      <div class="risk-scroll" id="risk-scroll" tabindex="0" aria-describedby="risk-scroll-hint">
+        <h3>用途与边界</h3>
+        <p>微书薯是只读工具，仅用于在单一设备上备份<strong>本人账号当前可见</strong>的微博数据，产出互动 HTML、PDF、Markdown 和本地媒体档案。它不发布、不修改、不删除任何微博内容。</p>
+        <h3>账号风险</h3>
+        <p>使用本工具访问微博接口可能触发平台风控。《微博服务使用协议》列明警告、禁言、限制功能、暂停服务和注销账号等措施；同类公开项目的历史不能证明你的账号不会受到处理。本工具只能降低请求密度、限制功能并在异常时暂停，无法量化或消除账号风险。</p>
+        <h3>禁止行为（10 不做）</h3>
+        <ol class="risk-list">
+          <li>评论发布</li>
+          <li>点赞自动化</li>
+          <li>关注自动化</li>
+          <li>转发自动化</li>
+          <li>多账号池</li>
+          <li>代理池 / IP 轮询</li>
+          <li>Cookie 池 / 账号包</li>
+          <li>绕过验证码或平台风控机制</li>
+          <li>微博 OAuth appkey 商业用途</li>
+          <li>跨设备 / 多 IP 同步登录</li>
+        </ol>
+        <p>此外，不得将本工具用于向陌生用户进行商业分发、SaaS 化服务或账号代抓。</p>
+        <h3>数据与隐私</h3>
+        <p>登录状态（Cookie）只保存在当前设备的当前用户环境中，不会上传，也不随微博书档案复制。微博书档案只保存在你自己选择的本地目录；卸载时可选择是否清理应用数据，档案目录不会被删除。</p>
+        <h3>责任声明</h3>
+        <p>本工具按“现状”提供。开发者不对账号处理结果、数据完整性或平台接口变化承担责任。点击“确认并继续”即表示你已完整阅读、理解并接受上述全部内容，并自行承担使用风险。</p>
+      </div>
+      <p class="risk-scroll-hint" id="risk-scroll-hint">请滚动阅读至底部后，“确认并继续”才会可用。</p>
+      <div class="risk-actions">
+        <button class="btn btn-secondary" id="risk-cancel-btn">取消</button>
+        <button class="btn btn-primary" id="risk-confirm-btn" disabled>确认并继续</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/desktop_bridge.js?v={{ version }}"></script>
+  <script src="/static/js/api_client.js?v={{ version }}"></script>
+  <script type="module" src="/static/js/modules/state.js?v={{ version }}"></script>
+  <script type="module" src="/static/js/modules/feedback.js?v={{ version }}"></script>
+  <script type="module" src="/static/js/modules/login.js?v={{ version }}"></script>
+  <script type="module" src="/static/js/modules/archive.js?v={{ version }}"></script>
+  <script type="module" src="/static/js/modules/tasks.js?v={{ version }}"></script>
+  <script type="module" src="/static/js/modules/desktop.js?v={{ version }}"></script>
+  {% if platform == 'win32' %}
+  <script src="/static/js/app-win.js?v={{ version }}"></script>
+  {% endif %}
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "source_scope": [
+    "data",
+    "cards"
+  ],
+  "verified_paths": {
+    "post_bid": [
+      "mblog",
+      "bid"
+    ],
+    "is_pinned": [
+      "mblog",
+      "title",
+      "text"
+    ],
+    "ip_location": [
+      "mblog",
+      "region_name"
+    ]
+  },
+  "cards": [
+    {
+      "mblog": {
+        "bid": "SYNTHPIN01",
+        "title": {
+          "text": "置顶"
+        },
+        "region_name": "发布于 测试地区"
+      }
+    },
+    {
+      "mblog": {
+        "bid": "SYNTHPIN02",
+        "title": {
+          "text": "置顶"
+        },
+        "region_name": "发布于 测试地区"
+      }
+    },
+    {
+      "mblog": {
+        "bid": "SYNTHLINK1",
+        "region_name": "发布于 测试地区"
+      }
+    }
+  ],
+  "pinned_card": {
+    "mblog": {
+      "bid": "SYNTHPIN01",
+      "title": {
+        "text": "置顶"
+      },
+      "region_name": "发布于 测试地区"
+    }
+  }
+}

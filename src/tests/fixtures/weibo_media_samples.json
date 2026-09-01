@@ -1,0 +1,41 @@
+{
+  "eighteen_live_photo": {
+    "source": "https://example.invalid/weibo/post/media-case-1",
+    "pics": [
+      {"type": "image", "large": {"url": "https://media.example/01.jpg"}},
+      {"type": "image", "large": {"url": "https://media.example/02.jpg"}},
+      {"type": "livephoto", "large": {"url": "https://media.example/03.jpg"}, "videoSrc": "https://media.example/03.mov"},
+      {"type": "image", "large": {"url": "https://media.example/04.jpg"}},
+      {"type": "image", "large": {"url": "https://media.example/05.jpg"}},
+      {"type": "image", "large": {"url": "https://media.example/06.jpg"}},
+      {"type": "image", "large": {"url": "https://media.example/07.jpg"}},
+      {"type": "image", "large": {"url": "https://media.example/08.jpg"}},
+      {"type": "image", "large": {"url": "https://media.example/09.jpg"}},
+      {"type": "image", "large": {"url": "https://media.example/10.jpg"}},
+      {"type": "image", "large": {"url": "https://media.example/11.jpg"}},
+      {"type": "image", "large": {"url": "https://media.example/12.jpg"}},
+      {"type": "image", "large": {"url": "https://media.example/13.jpg"}},
+      {"type": "livephoto", "large": {"url": "https://media.example/14.jpg"}, "videoSrc": "https://media.example/14.mov"},
+      {"type": "livephoto", "large": {"url": "https://media.example/15.jpg"}, "videoSrc": "https://media.example/15.mov"},
+      {"type": "image", "large": {"url": "https://media.example/16.jpg"}},
+      {"type": "livephoto", "large": {"url": "https://media.example/17.jpg"}, "videoSrc": "https://media.example/17.mov"},
+      {"type": "image", "large": {"url": "https://media.example/18.jpg"}}
+    ]
+  },
+  "nine_videos": {
+    "source": "https://example.invalid/weibo/post/mobile-case-2",
+    "mix_media_info": {
+      "items": [
+        {"type": "video", "data": {"page_pic": {"url": "https://media.example/v01.jpg"}, "media_info": {"duration": 23, "playback_list": [{"meta": {"quality_index": 480}, "play_info": {"url": "https://media.example/v01-480.mp4"}}, {"meta": {"quality_index": 720}, "play_info": {"url": "https://media.example/v01-720.mp4"}}]}}},
+        {"type": "video", "data": {"page_pic": {"url": "https://media.example/v02.jpg"}, "media_info": {"duration": 26, "stream_url_hd": "https://media.example/v02.mp4"}}},
+        {"type": "video", "data": {"page_pic": {"url": "https://media.example/v03.jpg"}, "media_info": {"duration": 9, "stream_url_hd": "https://media.example/v03.mp4"}}},
+        {"type": "video", "data": {"page_pic": {"url": "https://media.example/v04.jpg"}, "media_info": {"duration": 10, "stream_url_hd": "https://media.example/v04.mp4"}}},
+        {"type": "video", "data": {"page_pic": {"url": "https://media.example/v05.jpg"}, "media_info": {"duration": 10, "stream_url_hd": "https://media.example/v05.mp4"}}},
+        {"type": "video", "data": {"page_pic": {"url": "https://media.example/v06.jpg"}, "media_info": {"duration": 25, "stream_url_hd": "https://media.example/v06.mp4"}}},
+        {"type": "video", "data": {"page_pic": {"url": "https://media.example/v07.jpg"}, "media_info": {"duration": 20, "stream_url_hd": "https://media.example/v07.mp4"}}},
+        {"type": "video", "data": {"page_pic": {"url": "https://media.example/v08.jpg"}, "media_info": {"duration": 59, "stream_url_hd": "https://media.example/v08.mp4"}}},
+        {"type": "video", "data": {"page_pic": {"url": "https://media.example/v09.jpg"}, "media_info": {"duration": 69, "stream_url_hd": "https://media.example/v09.mp4"}}}
+      ]
+    }
+  }
+}

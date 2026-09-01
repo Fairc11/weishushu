@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "source_scope": [
+    "data",
+    "data"
+  ],
+  "verified_paths": {
+    "comment_id": [
+      "id"
+    ],
+    "comment_image": [
+      "pic",
+      "url"
+    ],
+    "reply_id": [
+      "reply_id"
+    ],
+    "reply_text": [
+      "reply_text"
+    ]
+  },
+  "picture_response": {
+    "data": {
+      "data": [
+        {
+          "id": "test-id-0001",
+          "pic": {
+            "url": "https://wx1.sinaimg.cn/large/test-image.jpg"
+          }
+        }
+      ]
+    }
+  },
+  "reply_response": {
+    "data": {
+      "data": [
+        {
+          "id": "test-id-0002"
+        },
+        {
+          "id": "test-id-0003",
+          "reply_id": "test-id-0002",
+          "reply_text": "测试文本"
+        }
+      ]
+    }
+  }
+}

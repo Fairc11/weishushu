@@ -1,0 +1,272 @@
+/* 应用壳层：顶栏、主列、历史抽屉和隐藏浏览器兼容骨架。 */
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 54px;
+  padding: 10px var(--wb-space-5);
+  background: var(--wb-glass-bg);
+  border-bottom: 1px solid var(--wb-border);
+  box-shadow: var(--wb-glass-highlight);
+  backdrop-filter: var(--wb-glass-blur);
+  -webkit-backdrop-filter: var(--wb-glass-blur);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: var(--wb-space-2);
+}
+
+.logo-dot {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border-radius: var(--wb-radius-badge);
+  background: var(--wb-brand-gradient);
+  box-shadow: var(--wb-brand-highlight), var(--wb-brand-shadow);
+}
+
+.brand-name {
+  color: var(--wb-text-1);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.brand-version {
+  color: var(--wb-text-3);
+  font-size: 11px;
+}
+
+.header-actions,
+.workflow-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--wb-space-2);
+}
+
+.login-menu-wrap {
+  position: relative;
+}
+
+.login-menu {
+  position: absolute;
+  top: calc(100% + var(--wb-space-2));
+  right: 0;
+  z-index: 500;
+  display: grid;
+  min-width: 210px;
+  padding: var(--wb-space-3);
+  gap: var(--wb-space-2);
+  background: var(--wb-glass-bg);
+  border: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius-overlay);
+  box-shadow: var(--wb-glass-highlight), var(--wb-shadow-overlay);
+  backdrop-filter: var(--wb-glass-blur);
+  -webkit-backdrop-filter: var(--wb-glass-blur);
+  animation: wb-overlay-in var(--wb-motion-standard) var(--wb-ease);
+}
+
+.login-menu[hidden] {
+  display: none !important;
+}
+
+.login-menu .btn {
+  width: 100%;
+}
+
+.app-main.app-split-view {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 0 minmax(0, 0);
+  height: calc(100vh - 54px);
+  min-height: 0;
+  background: var(--wb-bg);
+}
+
+.app-main.app-split-view:not(.browser-console-hidden) {
+  grid-template-columns: minmax(560px, 1fr) 1px minmax(360px, 0.62fr);
+}
+
+.main-area {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--wb-space-8) var(--wb-space-6) 64px;
+}
+
+.main-area .steps {
+  width: min(720px, 100%);
+  margin: 0 auto;
+}
+
+.splitter {
+  position: relative;
+  z-index: 8;
+  width: 1px;
+  cursor: col-resize;
+  background: var(--wb-border);
+}
+
+.splitter::after {
+  position: absolute;
+  inset: 0 -5px;
+  content: "";
+}
+
+.splitter:hover,
+.splitter:focus-visible {
+  background: var(--wb-brand);
+}
+
+.browser-console-hidden .splitter,
+.browser-console-hidden .browser-area {
+  display: none;
+}
+
+.browser-area {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--wb-surface);
+  border-left: 1px solid var(--wb-border);
+}
+
+.browser-area[hidden] {
+  display: none !important;
+}
+
+.browser-dock,
+.browser-glass {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--wb-glass-bg);
+  backdrop-filter: var(--wb-glass-blur);
+  -webkit-backdrop-filter: var(--wb-glass-blur);
+}
+
+.browser-panel-header,
+.browser-toolbar {
+  padding: var(--wb-space-3) var(--wb-space-4);
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.browser-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.browser-panel-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.browser-location-row,
+.browser-action-row {
+  display: flex;
+  align-items: center;
+  gap: var(--wb-space-2);
+}
+
+.browser-action-row {
+  margin-top: var(--wb-space-2);
+  justify-content: flex-end;
+}
+
+.browser-address {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--wb-text-3);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.native-browser-slot {
+  min-height: 0;
+  flex: 1;
+}
+
+.history-panel {
+  position: fixed;
+  top: 54px;
+  right: 0;
+  bottom: 0;
+  z-index: 600;
+  display: flex;
+  width: 340px;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--wb-surface);
+  border-left: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius-overlay) 0 0 var(--wb-radius-overlay);
+  box-shadow: var(--wb-shadow-overlay);
+  animation: wb-drawer-in var(--wb-motion-standard) var(--wb-ease);
+}
+
+.history-panel[hidden] {
+  display: none !important;
+}
+
+.history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--wb-space-4) var(--wb-space-4) var(--wb-space-3);
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.history-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.history-folder,
+.history-search {
+  display: flex;
+  align-items: center;
+  padding: var(--wb-space-3) var(--wb-space-4);
+  gap: var(--wb-space-2);
+}
+
+.history-search {
+  padding-top: 0;
+}
+
+.history-folder .hint {
+  min-width: 0;
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-list {
+  min-height: 0;
+  overflow: auto;
+  flex: 1;
+  padding: 0 var(--wb-space-2) var(--wb-space-3);
+}
+
+@keyframes wb-overlay-in {
+  from { opacity: 0; transform: translateY(var(--wb-space-2)) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes wb-drawer-in {
+  from { opacity: 0; transform: translateX(var(--wb-space-4)); }
+  to { opacity: 1; transform: translateX(0); }
+}

@@ -1,0 +1,3 @@
+# macOS 桌面开发入口
+-r common.txt
+pywebview==6.2.1

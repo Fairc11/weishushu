@@ -1,0 +1,574 @@
+/* 可复用组件：控件、卡片、徽章、模态、反馈与进度。 */
+
+.btn,
+.wb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 8px var(--wb-space-4);
+  gap: var(--wb-space-1);
+  border: 1px solid transparent;
+  border-radius: var(--wb-radius-control);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition:
+    transform var(--wb-motion-fast) var(--wb-ease),
+    filter var(--wb-motion-fast) var(--wb-ease),
+    background var(--wb-motion-fast) var(--wb-ease),
+    border-color var(--wb-motion-fast) var(--wb-ease),
+    color var(--wb-motion-fast) var(--wb-ease);
+}
+
+.btn:active,
+.wb-btn:active {
+  transform: scale(0.98);
+}
+
+.btn:disabled,
+.wb-btn:disabled,
+.wb-btn.is-disabled {
+  color: var(--wb-text-3);
+  background: var(--wb-surface-subtle);
+  border-color: transparent;
+  box-shadow: none;
+  text-shadow: none;
+  cursor: not-allowed;
+  filter: none;
+}
+
+.btn-primary,
+.wb-btn-primary {
+  color: var(--wb-on-brand);
+  background: var(--wb-brand-gradient);
+  box-shadow: var(--wb-brand-highlight), var(--wb-brand-shadow);
+  text-shadow: var(--wb-brand-text-shadow);
+}
+
+.btn-primary:hover:not(:disabled),
+.wb-btn-primary:hover:not(:disabled) {
+  filter: brightness(1.04);
+}
+
+.btn-primary:active:not(:disabled),
+.wb-btn-primary:active:not(:disabled) {
+  background: var(--wb-brand-pressed);
+}
+
+.btn-secondary,
+.wb-btn-secondary {
+  color: var(--wb-text-1);
+  background: var(--wb-surface);
+  border-color: var(--wb-border-strong);
+  box-shadow: var(--wb-shadow-card);
+}
+
+.btn-secondary:hover:not(:disabled),
+.wb-btn-secondary:hover:not(:disabled) {
+  background: var(--wb-surface-subtle);
+}
+
+.btn-danger-soft,
+.wb-btn-danger-soft {
+  color: var(--wb-danger);
+  background: var(--wb-danger-soft);
+  border-color: var(--wb-danger-edge);
+}
+
+.btn-sm,
+.wb-btn-sm {
+  min-height: 30px;
+  padding: 5px var(--wb-space-3);
+  font-size: 12px;
+}
+
+.btn-lg,
+.wb-btn-lg {
+  min-height: 44px;
+  padding: 12px var(--wb-space-6);
+  font-size: 14px;
+}
+
+.text-input,
+.wb-input,
+select,
+input[type="number"],
+input[type="date"] {
+  width: 100%;
+  min-height: 38px;
+  padding: 9px var(--wb-space-3);
+  color: var(--wb-text-1);
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border-strong);
+  border-radius: var(--wb-radius-control);
+  box-shadow: var(--wb-inset-input);
+  transition:
+    border-color var(--wb-motion-fast) var(--wb-ease),
+    box-shadow var(--wb-motion-fast) var(--wb-ease);
+}
+
+.text-input::placeholder,
+.wb-input::placeholder {
+  color: var(--wb-text-3);
+}
+
+.text-input:focus,
+.wb-input:focus,
+select:focus,
+input[type="number"]:focus,
+input[type="date"]:focus {
+  outline: none;
+  border-color: var(--wb-brand);
+  box-shadow: var(--wb-inset-input), var(--wb-focus-ring);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--wb-brand);
+}
+
+.card,
+.wb-card,
+.step-card,
+.focused-workflow,
+.progress-stage-card,
+.result-card {
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius-card);
+  box-shadow: var(--wb-shadow-card);
+}
+
+.badge,
+.wb-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  gap: var(--wb-space-1);
+  border: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius-pill);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.badge-muted,
+.wb-badge-muted {
+  color: var(--wb-text-2);
+  background: var(--wb-surface-subtle);
+}
+
+.badge-success,
+.wb-badge-success {
+  color: var(--wb-success);
+  background: var(--wb-success-soft);
+  border-color: var(--wb-success-edge);
+}
+
+.badge-warn,
+.wb-badge-warning {
+  color: var(--wb-warning);
+  background: var(--wb-warning-soft);
+}
+
+.badge-brand-soft,
+.wb-badge-brand {
+  color: var(--wb-brand-pressed);
+  background: var(--wb-brand-soft);
+}
+
+.login-status-control,
+.icon-btn,
+.icon-btn-sm,
+.browser-tool-button {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  color: var(--wb-text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--wb-radius-control);
+  cursor: pointer;
+  transition:
+    transform var(--wb-motion-fast) var(--wb-ease),
+    background var(--wb-motion-fast) var(--wb-ease),
+    border-color var(--wb-motion-fast) var(--wb-ease);
+}
+
+.login-status-control {
+  min-height: 32px;
+  padding: 0 var(--wb-space-1);
+  border-radius: var(--wb-radius-pill);
+}
+
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  font-size: 14px;
+}
+
+/* 主题切换按钮：两个字形同时存在 DOM 中，按当前主题只显示一个 */
+#theme-toggle .icon-dark {
+  display: none;
+}
+
+[data-theme="dark"] #theme-toggle .icon-dark {
+  display: inline;
+}
+
+[data-theme="dark"] #theme-toggle .icon-light {
+  display: none;
+}
+
+.icon-btn-sm,
+.browser-tool-button {
+  width: 28px;
+  height: 28px;
+  font-size: 15px;
+}
+
+.login-status-control:hover,
+.icon-btn:hover,
+.icon-btn-sm:hover,
+.browser-tool-button:hover {
+  background: var(--wb-surface-subtle);
+  border-color: var(--wb-border);
+}
+
+.login-status-control:active,
+.icon-btn:active,
+.icon-btn-sm:active,
+.browser-tool-button:active {
+  transform: scale(0.98);
+}
+
+.toast,
+.wb-toast {
+  position: fixed;
+  left: 50%;
+  bottom: var(--wb-space-5);
+  z-index: 1600;
+  max-width: min(520px, calc(100vw - var(--wb-space-8)));
+  padding: 8px var(--wb-space-4);
+  color: var(--wb-bg);
+  background: var(--wb-toast-bg);
+  border-radius: var(--wb-radius-pill);
+  box-shadow: var(--wb-shadow-overlay);
+  font-size: 12px;
+  text-align: center;
+  transform: translateX(-50%);
+  animation: wb-toast-in var(--wb-motion-standard) var(--wb-ease);
+}
+
+.toast[hidden] {
+  display: none !important;
+}
+
+.log-panel {
+  position: fixed;
+  right: var(--wb-space-4);
+  bottom: var(--wb-space-4);
+  z-index: 800;
+  width: min(380px, calc(100vw - var(--wb-space-8)));
+  height: 220px;
+  overflow: hidden;
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius-card);
+  box-shadow: var(--wb-shadow-overlay);
+}
+
+.log-panel[hidden] {
+  display: none !important;
+}
+
+.log-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--wb-space-2) var(--wb-space-3);
+  border-bottom: 1px solid var(--wb-border);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.log-content {
+  height: calc(100% - 40px);
+  margin: 0;
+  overflow: auto;
+  padding: var(--wb-space-2) var(--wb-space-3);
+  color: var(--wb-text-2);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.log-entry-warning { color: var(--wb-warning); }
+.log-entry-error { color: var(--wb-danger); }
+.log-entry-log { color: var(--wb-text-2); }
+
+.log-toggle {
+  position: fixed;
+  right: var(--wb-space-4);
+  bottom: var(--wb-space-4);
+  z-index: 780;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--wb-text-2);
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius-pill);
+  box-shadow: var(--wb-shadow-card);
+  cursor: pointer;
+}
+
+.archive-folder-overlay,
+.recovery-task-overlay,
+.close-protection-overlay,
+.risk-modal-overlay,
+.qrcode-login-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: var(--wb-space-8);
+  background: var(--wb-mask);
+  backdrop-filter: var(--wb-glass-blur);
+  -webkit-backdrop-filter: var(--wb-glass-blur);
+}
+
+.archive-folder-overlay[hidden],
+.recovery-task-overlay[hidden],
+.close-protection-overlay[hidden],
+.risk-modal-overlay[hidden],
+.qrcode-login-overlay[hidden] {
+  display: none !important;
+}
+
+/* 独立保留该选择器，防止风险强模态在旧 WebView 中被组合规则覆盖。 */
+.risk-modal-overlay[hidden] {
+  display: none !important;
+}
+
+.archive-folder-modal,
+.recovery-task-modal,
+.close-protection-modal,
+.risk-modal,
+.qrcode-login-modal,
+.wb-modal {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 64px);
+  overflow: auto;
+  padding: var(--wb-space-6);
+  color: var(--wb-text-1);
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius-overlay);
+  box-shadow: var(--wb-shadow-overlay);
+  animation: wb-overlay-in var(--wb-motion-standard) var(--wb-ease);
+}
+
+.recovery-task-modal,
+.close-protection-modal,
+.risk-modal,
+.qrcode-login-modal {
+  width: min(460px, 100%);
+}
+
+.archive-folder-header,
+.recovery-task-header {
+  display: flex;
+  align-items: center;
+  gap: var(--wb-space-3);
+}
+
+.archive-folder-header {
+  justify-content: space-between;
+}
+
+.archive-folder-header h2,
+.recovery-task-header h2,
+.close-protection-modal h2,
+.risk-modal h2,
+.qrcode-login-modal h2,
+.wb-modal-title {
+  margin: var(--wb-space-1) 0 var(--wb-space-3);
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.recovery-task-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  color: var(--wb-brand-pressed);
+  background: var(--wb-brand-soft);
+  border-radius: var(--wb-radius-pill);
+  font-size: 17px;
+}
+
+.recovery-task-intro,
+.close-protection-modal > p:not(.workflow-eyebrow),
+.qrcode-login-help {
+  color: var(--wb-text-2);
+  font-size: 13px;
+}
+
+.recovery-task-summary {
+  margin-top: var(--wb-space-4);
+  padding: var(--wb-space-3) var(--wb-space-4);
+  color: var(--wb-text-2);
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius-control);
+  font-size: 12px;
+  white-space: pre-line;
+}
+
+.risk-modal {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.risk-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(52vh, 460px);
+  overflow-y: auto;
+  padding: var(--wb-space-3) var(--wb-space-4);
+  border: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius-control);
+  background: var(--wb-bg);
+}
+
+.risk-scroll h3 {
+  margin: var(--wb-space-3) 0 var(--wb-space-1);
+  color: var(--wb-text-1);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.risk-scroll h3:first-child {
+  margin-top: 0;
+}
+
+.risk-scroll p {
+  margin: var(--wb-space-1) 0;
+  color: var(--wb-text-1);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.risk-list {
+  margin: var(--wb-space-2) 0;
+  padding: 0 0 0 22px;
+  color: var(--wb-text-1);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.risk-list li {
+  padding: 1px 0;
+}
+
+.risk-list li::marker {
+  color: var(--wb-text-2);
+  font-weight: 600;
+}
+
+.risk-scroll-hint {
+  margin: var(--wb-space-2) 0 0;
+  color: var(--wb-text-2);
+  font-size: 12px;
+  text-align: center;
+}
+
+.risk-actions,
+.recovery-task-actions,
+.close-protection-actions,
+.archive-folder-actions,
+.qrcode-login-actions,
+.wb-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--wb-space-5);
+  gap: var(--wb-space-2);
+  flex-wrap: wrap;
+}
+
+.qrcode-login-modal {
+  text-align: center;
+}
+
+.qrcode-login-message,
+.qrcode-login-remaining,
+.qrcode-login-help {
+  margin: var(--wb-space-2) 0;
+}
+
+.qrcode-login-frame {
+  display: grid;
+  place-items: center;
+  width: 220px;
+  height: 220px;
+  margin: var(--wb-space-5) auto var(--wb-space-3);
+  overflow: hidden;
+  background: var(--wb-on-brand);
+  border: 1px solid var(--wb-border-strong);
+  border-radius: var(--wb-radius-overlay);
+  box-shadow: var(--wb-inset-input);
+}
+
+.qrcode-login-frame img {
+  width: 188px;
+  height: 188px;
+  image-rendering: pixelated;
+}
+
+.qrcode-login-placeholder {
+  max-width: 150px;
+  color: var(--wb-text-3);
+  line-height: 1.5;
+}
+
+.qrcode-login-actions {
+  justify-content: center;
+}
+
+.progress-bar,
+.wb-progress-track {
+  height: 5px;
+  overflow: hidden;
+  background: var(--wb-surface-subtle);
+  border-radius: var(--wb-radius-pill);
+}
+
+.progress-fill,
+.wb-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--wb-brand);
+  border-radius: var(--wb-radius-pill);
+  transition: width var(--wb-motion-standard) var(--wb-ease);
+}
+
+@keyframes wb-toast-in {
+  from { opacity: 0; transform: translate(-50%, var(--wb-space-2)); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}

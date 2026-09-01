@@ -1,0 +1,217 @@
+/* 响应式、滚动条和能力降级。 */
+
+.app-main.app-split-view {
+  height: calc(100dvh - 54px);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--wb-border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--wb-border-strong);
+  border: 2px solid transparent;
+  border-radius: var(--wb-radius-pill);
+  background-clip: content-box;
+}
+
+@media (max-width: 1100px) {
+  .app-header {
+    min-height: 54px;
+    padding: 10px var(--wb-space-4);
+  }
+
+  .app-main.app-split-view,
+  .app-main.app-split-view:not(.browser-console-hidden) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .main-area {
+    padding: var(--wb-space-6) var(--wb-space-4) 56px;
+  }
+
+  .splitter {
+    display: none;
+  }
+
+  .browser-area {
+    position: absolute;
+    inset: 0;
+    z-index: 80;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 680px) {
+  .brand-version {
+    display: none;
+  }
+
+  .workflow-toolbar {
+    gap: var(--wb-space-1);
+  }
+
+  .login-status-control {
+    max-width: 112px;
+  }
+
+  .focused-workflow,
+  .step-card,
+  .progress-stage-card,
+  .result-card {
+    padding: var(--wb-space-4);
+  }
+
+  .focused-workflow .url-row,
+  .url-row {
+    flex-direction: column;
+  }
+
+  .focused-workflow .btn,
+  .url-row .btn {
+    width: 100%;
+  }
+
+  .settings-grid,
+  .scope-date-grid,
+  .archive-folder-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .setting,
+  .setting:nth-child(even):not(.setting-full) {
+    grid-column: 1;
+    border-right: 0;
+  }
+
+  .format-row,
+  .switches {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .progress-stage-list {
+    padding: 0;
+  }
+
+  .progress-stage-list li {
+    font-size: 10px;
+  }
+
+  .progress-stage-live,
+  .low-intensity-status-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .archive-folder-overlay,
+  .recovery-task-overlay,
+  .close-protection-overlay,
+  .risk-modal-overlay,
+  .qrcode-login-overlay {
+    padding: var(--wb-space-3);
+  }
+
+  .archive-folder-modal,
+  .recovery-task-modal,
+  .close-protection-modal,
+  .risk-modal,
+  .qrcode-login-modal {
+    max-height: calc(100dvh - var(--wb-space-6));
+    padding: var(--wb-space-4);
+  }
+
+  .risk-actions,
+  .recovery-task-actions,
+  .close-protection-actions,
+  .archive-folder-actions,
+  .qrcode-login-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .risk-actions .btn,
+  .recovery-task-actions .btn,
+  .close-protection-actions .btn,
+  .archive-folder-actions .btn,
+  .qrcode-login-actions .btn {
+    width: 100%;
+  }
+
+  .history-panel {
+    top: 54px;
+    width: 100vw;
+    border-radius: 0;
+  }
+
+  .qrcode-login-frame {
+    width: 200px;
+    height: 200px;
+  }
+
+  .qrcode-login-frame img {
+    width: 172px;
+    height: 172px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .btn:active,
+  .icon-btn:active,
+  .login-status-control:active,
+  .browser-tool-button:active {
+    transform: none;
+  }
+}
+
+@supports not (height: 100dvh) {
+  .app-main.app-split-view {
+    height: calc(100vh - 54px);
+  }
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .app-header,
+  .login-menu,
+  .browser-glass,
+  .archive-folder-overlay,
+  .recovery-task-overlay,
+  .close-protection-overlay,
+  .risk-modal-overlay,
+  .qrcode-login-overlay {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@supports not (font-weight: 650) {
+  .brand-name,
+  .step-title,
+  .history-header h3,
+  .archive-folder-header h2,
+  .recovery-task-header h2,
+  .close-protection-modal h2,
+  .risk-modal h2,
+  .qrcode-login-modal h2 {
+    font-weight: 600;
+  }
+}

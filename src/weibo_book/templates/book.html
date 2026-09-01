@@ -1,0 +1,774 @@
+{% if archive_mode %}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>{{ snapshot.user.screen_name }}的微博书</title>
+<style>
+:root{--wb-primary:#fa7d3c;--wb-blue:#3c8cff;--wb-bg:#f2f2f5;--wb-card:#fff;--wb-text:#18191c;--wb-muted:#93959c;--wb-line:#ececef;--wb-radius:12px;--wb-shadow:0 1px 3px rgba(0,0,0,.08)}
+*{box-sizing:border-box}html{background:#dedee3}body{margin:0;color:var(--wb-text);background:var(--wb-bg);font:14px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;min-height:100vh}button{font:inherit}.app-shell{max-width:680px;min-height:100vh;margin:auto;background:var(--wb-bg);box-shadow:0 0 40px rgba(0,0,0,.08)}
+.topbar{position:sticky;z-index:20;top:0;height:52px;display:grid;grid-template-columns:64px 1fr 64px;align-items:center;padding:0 14px;background:rgba(255,255,255,.94);border-bottom:1px solid var(--wb-line);backdrop-filter:saturate(1.4) blur(16px)}.topbar h1{font-size:17px;text-align:center}.topbar small{color:var(--wb-muted);text-align:right}.back{border:0;background:none;color:var(--wb-primary);cursor:pointer}.profile{padding:20px 16px 14px;background:var(--wb-card);display:flex;gap:12px;align-items:center}.avatar,.comment-avatar{display:grid;place-items:center;flex:none;border-radius:50%;color:#fff;background:linear-gradient(145deg,var(--wb-primary),#ed5d2a);font-weight:700}.avatar{width:48px;height:48px;font-size:18px}.profile strong{display:block;font-size:17px}.profile p{margin:2px 0;color:var(--wb-muted);font-size:12px}.archive-note{margin:10px 12px;padding:9px 12px;border:1px solid #ffdcca;border-radius:9px;background:#fff8f3;color:#8c4d2d;font-size:12px}
+.feed,.feed-card,.identity,.media-grid,.video-shell{min-width:0}.feed{display:grid;gap:8px}.feed-card{width:100%;overflow:hidden;background:var(--wb-card);padding:14px 16px;box-shadow:var(--wb-shadow);outline:none}.feed-card:focus-visible,.local-control:focus-visible{outline:3px solid rgba(60,140,255,.3);outline-offset:-3px}.card-head{display:flex;gap:10px;min-width:0}.card-head .avatar{width:40px;height:40px;font-size:14px}.identity{flex:1}.name{font-weight:650;font-size:15px}.meta{color:var(--wb-muted);font-size:12px;overflow-wrap:anywhere}.pin,.unavailable{display:inline-block;margin-left:6px;padding:0 5px;border-radius:4px;font-size:10px}.pin{color:#d95820;background:#fff0e8}.unavailable{color:#73757c;background:#eeeef1}.post-text{margin:9px 0 10px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:16px;line-height:1.65}.quote{min-width:0;margin:8px 0;padding:10px;border-radius:8px;background:#f7f7f9;color:#555;overflow-wrap:anywhere}.media-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;border-radius:8px;overflow:hidden}.media-grid[data-count="1"]{grid-template-columns:minmax(0,1fr)}.media-grid[data-count="2"]{grid-template-columns:repeat(2,minmax(0,1fr))}.media-grid>*{aspect-ratio:1;min-width:0;background:#ececf0}.media-grid img,.media-grid video{width:100%;height:100%;display:block;object-fit:cover}.media-button{position:relative;min-width:0;padding:0;border:0;cursor:zoom-in}.live-label{position:absolute;right:6px;top:6px;padding:2px 6px;border-radius:9px;background:rgba(0,0,0,.62);color:white;font-size:10px}.metrics{display:flex;justify-content:space-around;margin:12px -16px -14px;padding:10px 8px;border-top:1px solid var(--wb-line);color:var(--wb-muted)}.metric{display:inline-flex;min-width:0;align-items:center}.more{display:block;width:calc(100% - 24px);margin:12px;padding:11px;border:1px solid #ddd;border-radius:10px;background:white;color:#555;cursor:pointer}
+.detail[hidden],.feed-view[hidden]{display:none}.detail-card{background:white;padding:16px}.detail-title{font-size:12px;color:var(--wb-muted);margin:20px 0 8px}.revision-list{display:flex;gap:6px;overflow:auto}.revision-list button{white-space:nowrap;border:1px solid #ddd;border-radius:8px;background:white;padding:6px 9px}.comments{border-top:8px solid var(--wb-bg)}.comment{display:flex;gap:9px;padding:12px 16px;border-bottom:1px solid var(--wb-line)}.comment.reply{padding-left:52px}.comment-avatar{width:30px;height:30px;font-size:11px}.comment-main{min-width:0;flex:1}.comment-name{color:#5b6c8f}.comment-badge{display:inline-block;margin-left:5px;padding:0 4px;border-radius:4px;color:#d95820;background:#fff0e8;font-size:10px}.comment-text{white-space:pre-wrap}.comment-like{margin-top:3px;color:var(--wb-muted);font-size:12px}.comment-image{display:block;max-width:150px;max-height:150px;margin-top:7px;border-radius:7px;cursor:zoom-in}.empty{padding:32px;color:var(--wb-muted);text-align:center}
+.lightbox{position:fixed;z-index:50;inset:0;display:grid;grid-template:48px 1fr 60px/56px 1fr 56px;background:rgba(0,0,0,.94);color:#fff}.lightbox[hidden]{display:none}.lightbox-stage{grid-area:2/1/3/4;overflow:hidden;display:grid;place-items:center;touch-action:none}.lightbox-stage img{max-width:92vw;max-height:82vh;transform:translate(var(--tx,0),var(--ty,0)) scale(var(--scale,1));user-select:none}.lightbox button{border:0;background:none;color:white;font-size:24px;cursor:pointer}.lightbox-close{grid-area:1/3}.lightbox-prev{grid-area:2/1}.lightbox-next{grid-area:2/3}.zoom-tools{grid-area:3/1/4/4;text-align:center}.zoom-tools button{margin:0 12px}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+.video-poster,.pdf-media-block{display:none}.video-shell{position:relative}.video-shell video{width:100%;height:100%}.pdf-media-link{color:#315f9d;text-decoration:none}.pdf-media-link img{width:100%;height:100%;object-fit:cover}
+@media(min-width:681px){body{padding:20px 0}.app-shell{border-radius:18px;overflow:clip}.feed{padding:10px}.feed-card{border-radius:var(--wb-radius)}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
+body.print-mode .topbar,body.print-mode .more,body.print-mode .archive-note,body.print-mode .profile{display:none!important}body.print-mode .feed{display:block}body.print-mode .feed-card{break-inside:auto}
+@page{size:A4;margin:18mm 16mm}
+.pdf-cover{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:230mm;text-align:center;break-after:page;page-break-after:always}.pdf-cover .avatar{width:84px;height:84px;font-size:32px;margin:0 0 20px}.pdf-cover h1{font-size:26px;margin:0 0 10px}.pdf-cover-meta{margin:3px 0;color:var(--wb-muted);font-size:13px}.pdf-cover-date{margin-top:30px;color:var(--wb-muted);font-size:12px}
+.pdf-toc{break-after:page;page-break-after:always;padding:6mm 2mm}.pdf-toc h2{font-size:20px;margin:0 0 14px}.pdf-toc-year{margin:14px 0 6px;color:var(--wb-primary);font-size:15px;font-weight:650}.pdf-toc-months{list-style:none;margin:0;padding:0}.pdf-toc-months li{padding:5px 0;border-bottom:1px solid var(--wb-line);font-size:13px}.pdf-toc-months a{color:var(--wb-text);text-decoration:none}
+.pdf-chapter-year{break-before:page;page-break-before:always;margin:0 0 2px;padding-top:4px;font-size:22px}.pdf-chapter-month{margin:0 0 12px;color:var(--wb-muted);font-size:15px;font-weight:600}
+.media-grid[data-count="4"]{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media print{html,body,.app-shell{background:white;box-shadow:none}.topbar,.more,.archive-note,.profile,.lightbox{display:none!important}.feed{display:block}.feed-card{break-inside:auto;box-shadow:none;border-bottom:1px solid #ddd}.feed-card:nth-child(n+21){display:block}.media-grid>.media-button,.video-shell>video,.video-shell>.video-poster{display:none!important}.pdf-media-block,.pdf-media-link{display:block!important}.media-grid[data-count="1"]>*{aspect-ratio:auto}.media-grid[data-count="1"] .pdf-media-link img{height:auto;max-height:240mm;object-fit:contain}.comments{break-inside:auto}.comment{break-inside:avoid}}
+</style>
+</head>
+<body>
+<main class="app-shell" data-app-shell>
+  <header class="topbar"><button class="back local-control" type="button" data-action="back" hidden aria-label="返回信息流">‹ 返回</button><h1><span data-title>微博书</span></h1><small>离线档案</small></header>
+  <section class="feed-view" data-view="feed">
+    <div class="profile">{% if snapshot.user.avatar_url %}<img class="avatar" src="{{ snapshot.user.avatar_url }}" alt="{{ snapshot.user.screen_name }}头像">{% else %}<div class="avatar" aria-hidden="true">{{ snapshot.user.screen_name[:1] }}</div>{% endif %}<div><strong>{{ snapshot.user.screen_name }}</strong><p>微博正文 · 共 {{ snapshot.posts|length }} 条</p></div></div>
+    <p class="archive-note">这是本地只读档案。转发、评论与赞仅展示归档数值。</p>
+    <div class="feed" data-feed data-batch-size="20"></div>
+    <button class="more local-control" type="button" data-action="more">加载更多</button>
+  </section>
+  <section class="detail" data-view="detail" hidden aria-label="微博正文详情"></section>
+</main>
+<div class="lightbox" data-media-lightbox role="dialog" aria-modal="true" aria-label="图片查看器" tabindex="-1" hidden>
+  <button class="lightbox-close local-control" type="button" data-action="lightbox-close" aria-label="关闭">×</button>
+  <button class="lightbox-prev local-control" type="button" data-action="lightbox-prev" aria-label="上一张">‹</button>
+  <div class="lightbox-stage"><img alt="放大的微博图片" data-lightbox-image></div>
+  <button class="lightbox-next local-control" type="button" data-action="lightbox-next" aria-label="下一张">›</button>
+  <div class="zoom-tools"><button class="local-control" type="button" data-action="zoom-out" aria-label="缩小">−</button><button class="local-control" type="button" data-action="zoom-in" aria-label="放大">＋</button></div>
+</div>
+<script src="data/archive-data.js"></script>
+<script>
+(()=>{"use strict";
+const archive=window.__WEISHUSHU_ARCHIVE__,appShell=document.querySelector("[data-app-shell]"),feed=document.querySelector("[data-feed]"),detail=document.querySelector('[data-view="detail"]'),feedView=document.querySelector('[data-view="feed"]'),more=document.querySelector('[data-action="more"]'),back=document.querySelector('[data-action="back"]'),title=document.querySelector("[data-title]"),lightbox=document.querySelector("[data-media-lightbox]"),lightboxImage=document.querySelector("[data-lightbox-image]");
+const batch=20,query=new URLSearchParams(location.search),printMode=query.has("print")||location.hash==="#print",requestedPrintStart=Number.parseInt(query.get("printStart")||"0",10),requestedPrintLimit=Number.parseInt(query.get("printLimit")||String(archive.posts.length),10),printStart=Number.isSafeInteger(requestedPrintStart)&&requestedPrintStart>=0?requestedPrintStart:0,printLimit=Number.isSafeInteger(requestedPrintLimit)&&requestedPrintLimit>=0?requestedPrintLimit:archive.posts.length,state={shown:0,scroll:0,images:[],imageIndex:0,scale:1,x:0,y:0,drag:null,lightboxTrigger:null,backgroundAriaHidden:null,backgroundInert:false};
+const el=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=String(text);return node};
+const initials=value=>(value||"微").slice(0,1);
+function avatar(url,label){if(url){const image=el("img","avatar");image.src=url;image.alt=`${label||"微博用户"}头像`;return image}return el("span","avatar",initials(label||archive.user.screen_name))}
+function mediaHref(bid,owner){return `微博书.html#post-${encodeURIComponent(bid)}&media=${owner}`}
+function printMediaBlock(href,source,label,owner=""){const block=el("div","pdf-media-block"),link=el("a","pdf-media-link");if(owner)block.dataset.mediaOwner=owner;link.href=href;link.setAttribute("aria-label",label);if(source){const image=el("img");image.src=source;image.alt=label;link.append(image)}else link.textContent=label;block.append(link);return block}
+function renderMediaItems(items,container,group,bid,namespace){const grid=el("div","media-grid");grid.dataset.count=String(items.length);items.forEach(item=>{if(item.kind==="unavailable"){grid.append(el("div","empty","媒体记录不可用"));return}const owner=`${namespace}:${item.position}`,htmlHref=mediaHref(bid,owner);if(item.kind==="video"){const shell=el("div","video-shell");shell.dataset.mediaOwner=owner;shell.tabIndex=0;if(printMode){shell.append(printMediaBlock(htmlHref,item.cover_url,"在互动微博书中查看视频",owner));grid.append(shell);return}const video=el("video");video.controls=true;video.preload="metadata";video.src=item.browser_url;video.dataset.hasPoster=item.cover_url?"1":"0";if(item.cover_url){video.poster=item.cover_url;const poster=el("img","video-poster");poster.src=item.cover_url;poster.alt="视频封面";shell.append(poster)}video.setAttribute("aria-label","微博视频");shell.append(video);grid.append(shell);return}if(item.kind==="live_photo"){const shell=el("div","video-shell");shell.dataset.mediaOwner=owner;shell.tabIndex=0;if(printMode){shell.append(printMediaBlock(htmlHref,item.image_url,"在互动微博书中查看实况照片",owner));grid.append(shell);return}const wrap=el("button","media-button local-control");wrap.type="button";wrap.dataset.livePhoto="";wrap.setAttribute("aria-label","播放实况照片");const image=el("img");image.src=item.image_url;image.alt="实况照片";const video=el("video");video.src=item.video_url;video.preload="metadata";video.muted=true;video.loop=true;video.hidden=true;wrap.append(image,video,el("span","live-label","LIVE"));shell.append(wrap);grid.append(shell);return}const shell=el("div","video-shell");shell.dataset.mediaOwner=owner;const source=item.thumbnail_url||item.browser_url;if(printMode)shell.append(printMediaBlock(htmlHref,source,"在互动微博书中查看高清图片",owner));else{const button=el("button","media-button local-control");button.type="button";button.dataset.localImage=item.browser_url;button.dataset.mediaGroup=group;button.dataset.mediaOwner=owner;button.setAttribute("aria-label","查看微博图片");const image=el("img");image.src=source;image.alt="微博图片";button.append(image);shell.append(button)}grid.append(shell)});if(items.length)container.append(grid)}
+function renderLinkCard(card,container,group,bid,namespace){if(!card)return;const box=el("div","quote"),owner=`${namespace}:0`;if(printMode&&card.local_image)box.append(printMediaBlock(mediaHref(bid,owner),card.browser_url,"在互动微博书中查看引用卡片图片",owner));else if(card.browser_url){const button=el("button","media-button local-control");button.type="button";button.dataset.localImage=card.browser_url;button.dataset.mediaGroup=group;button.dataset.mediaOwner=owner;button.setAttribute("aria-label","查看引用卡片图片");const image=el("img");image.src=card.browser_url;image.alt="引用卡片图片";button.append(image);box.append(button)}const label=el(card.url?"a":"strong","",card.title||"引用卡片");if(card.url){label.href=card.url;label.target="_blank";label.rel="noopener noreferrer"}box.append(label);if(card.description)box.append(el("div","meta",card.description));container.append(box)}
+function metrics(post){const row=el("div","metrics");[["转发",post.reposts_count],["评论",post.comments_count],["赞",post.likes_count]].forEach(([label,count])=>row.append(el("span","metric",`${label} ${count||0}`)));return row}
+function body(post,groupPrefix){const fragment=document.createDocumentFragment(),text=el("div","post-text",post.text);text.dataset.currentText="";fragment.append(text);if(post.retweeted_payload){const retweet=post.retweeted_payload,quote=el("div","quote"),retweetHead=el("div","card-head");retweetHead.append(avatar(retweet.avatar_url,retweet.user_name),el("strong","",retweet.user_name?`@${retweet.user_name}`:"转发微博"));quote.append(retweetHead,el("div","post-text",retweet.text||""),el("div","meta",[retweet.created_at,retweet.source,retweet.ip_location].filter(Boolean).join(" · ")));renderMediaItems(retweet.media,quote,`${groupPrefix}:retweet`,post.bid,"retweet");renderLinkCard(retweet.link_card,quote,`${groupPrefix}:retweet-link`,post.bid,"retweet-link");fragment.append(quote)}renderLinkCard(post.link_card_payload,fragment,`${groupPrefix}:link`,post.bid,"link");renderMediaItems(post.media,fragment,`${groupPrefix}:main`,post.bid,"main");fragment.append(metrics(post));return fragment}
+function revisionControls(post){if(!post.revisions.length)return document.createDocumentFragment();const box=el("section");box.dataset.revisions="";box.append(el("h2","detail-title","正文历史（当前正文默认显示）"));const list=el("div","revision-list"),current=el("button","local-control","当前正文");current.type="button";current.dataset.revisionCurrent="";list.append(current);post.revisions.forEach((revision,index)=>{const button=el("button","local-control",`第 ${revision.revision_no} 版 · ${revision.captured_at}`);button.type="button";button.dataset.revisionIndex=String(index);list.append(button)});box.append(list);return box}
+function postHeader(post){const head=el("div","card-head"),identity=el("div","identity"),name=el("div","name",archive.user.screen_name),meta=el("div","meta",[post.created_at,post.source,post.ip_location].filter(Boolean).join(" · "));if(post.is_pinned)name.append(el("span","pin","置顶"));if(post.visibility!=="visible")name.append(el("span","unavailable","当前不可见"));identity.append(name,meta);head.append(avatar(archive.user.avatar_url,archive.user.screen_name),identity);return head}
+function card(post){const article=el("article","feed-card");article.id=`post-${post.bid}`;article.tabIndex=0;article.dataset.bid=post.bid;article.setAttribute("role","link");article.setAttribute("aria-label",`打开微博正文 ${post.bid}`);article.append(postHeader(post),body(post,`${post.bid}:current`));if(printMode&&post.comments.length)article.append(comments(post));return article}
+function appendBatch(){const end=Math.min(state.shown+batch,archive.posts.length);archive.posts.slice(state.shown,end).forEach(post=>feed.append(card(post)));state.shown=end;more.hidden=end>=archive.posts.length}
+function paintDetail(view,current,version){const article=detail.querySelector(".detail-card"),content=el("div");content.dataset.detailContent="";content.append(postHeader(view),body(view,`${current.bid}:${version}`),revisionControls(current));article.replaceChildren(content)}
+function normalizeMediaOwner(value){if(value===null)return null;if(/^\d+$/.test(value))return `main:${value}`;if(/^(main|retweet|link|retweet-link):\d+$/.test(value))return value;const comment=value.match(/^comment:([^:]+):(\d+)$/);if(comment){try{return `comment:${decodeURIComponent(comment[1])}:${comment[2]}`}catch(_error){return null}}return null}
+function parseArchiveHash(){const match=location.hash.match(/^#post-([^&]+)(?:&media=(.+))?$/);if(!match)return null;try{return{bid:decodeURIComponent(match[1]),media:normalizeMediaOwner(match[2]===undefined?null:match[2])}}catch(_error){return null}}
+function focusRequestedMedia(owner){if(owner===null)return;const target=detail.querySelector(`[data-media-owner="${CSS.escape(owner)}"]`);if(!target)return;target.scrollIntoView({block:"center"});const image=target.matches("[data-local-image]")?target:target.querySelector("[data-local-image]");if(image)showLightbox(image.dataset.localImage,image);else target.focus()}
+function openPost(bid,push=true,mediaOwner=null){const post=archive.posts.find(item=>item.bid===bid);if(!post)return;state.scroll=window.scrollY;detail.replaceChildren(el("article","detail-card"));if(post.comments.length)detail.append(comments(post));paintDetail(post,post,"current");feedView.hidden=true;detail.hidden=false;back.hidden=false;title.textContent="微博正文";const nextHash=`#post-${encodeURIComponent(post.bid)}${mediaOwner===null?"":`&media=${mediaOwner}`}`;if(push&&location.hash!==nextHash)history.pushState({bid:post.bid},"",nextHash);window.scrollTo(0,0);focusRequestedMedia(mediaOwner)}
+function comments(post){if(!post.comments.length)return document.createDocumentFragment();const section=el("section","comments"),heading=el("h2","detail-title",`评论 ${post.comments.length}`);section.append(heading);post.comments.forEach(comment=>{const row=el("article",`comment${comment.parent_id?" reply":""}`),main=el("div","comment-main"),name=el("div","comment-name",comment.user_name||"微博用户");if(comment.is_blogger)name.append(el("span","comment-badge","博主"));const reply=comment.reply_to_name?`回复 @${comment.reply_to_name}：`:"";main.append(name,el("div","comment-text",`${reply}${comment.text||""}`),el("div","meta",[comment.created_at,comment.source].filter(Boolean).join(" · ")),el("div","comment-like",`赞 ${comment.like_counts||0}`));comment.media.forEach(media=>{const owner=`comment:${comment.id}:${media.position}`;if(printMode)main.append(printMediaBlock(mediaHref(post.bid,owner),media.browser_url,"在互动微博书中查看评论图片",owner));else{const image=el("img","comment-image");image.src=media.browser_url;image.alt="评论图片";image.tabIndex=0;image.dataset.localImage=media.browser_url;image.dataset.mediaGroup=`${post.bid}:comment:${comment.id}`;image.dataset.mediaOwner=owner;main.append(image)}});row.append(avatar(comment.avatar_url,comment.user_name),main);section.append(row)});return section}
+function closeDetail(){detail.hidden=true;feedView.hidden=false;back.hidden=true;title.textContent="微博书";if(location.hash)history.pushState({},"",location.pathname+location.search);requestAnimationFrame(()=>window.scrollTo(0,state.scroll))}
+function collectImages(group,trigger){const root=trigger.closest("[data-detail-content]")||trigger.closest("[data-bid]")||detail;state.images=Array.from(new Set(Array.from(root.querySelectorAll(`[data-media-group="${CSS.escape(group)}"]`),node=>node.dataset.localImage).filter(Boolean)))}
+function showLightbox(path,trigger){collectImages(trigger.dataset.mediaGroup,trigger);state.lightboxTrigger=trigger||document.activeElement;state.backgroundAriaHidden=appShell.getAttribute("aria-hidden");state.backgroundInert=appShell.inert;appShell.inert=true;appShell.setAttribute("aria-hidden","true");state.imageIndex=Math.max(0,state.images.indexOf(path));state.scale=1;state.x=state.y=0;paintLightbox();lightbox.hidden=false;lightbox.focus()}
+function closeLightbox(){lightbox.hidden=true;appShell.inert=state.backgroundInert;if(state.backgroundAriaHidden===null)appShell.removeAttribute("aria-hidden");else appShell.setAttribute("aria-hidden",state.backgroundAriaHidden);if(state.lightboxTrigger&&state.lightboxTrigger.isConnected)state.lightboxTrigger.focus();state.lightboxTrigger=null}
+function paintLightbox(){lightboxImage.src=state.images[state.imageIndex]||"";lightboxImage.style.setProperty("--scale",state.scale);lightboxImage.style.setProperty("--tx",`${state.x}px`);lightboxImage.style.setProperty("--ty",`${state.y}px`)}
+function toggleLive(target){const image=target.querySelector("img"),video=target.querySelector("video"),playing=!video.hidden;video.hidden=playing;image.hidden=!playing;if(playing){video.pause();return}if(matchMedia("(prefers-reduced-motion: reduce)").matches){video.controls=true;return}video.play()}
+document.addEventListener("click",event=>{const target=event.target.closest("[data-action],[data-bid],[data-local-image],[data-live-photo],[data-revision-index],[data-revision-current]");if(!target)return;if(target.dataset.bid){openPost(target.dataset.bid);return}if(target.dataset.localImage){showLightbox(target.dataset.localImage,target);return}if(target.hasAttribute("data-live-photo")){toggleLive(target);return}const parsed=parseArchiveHash(),current=parsed?archive.posts.find(item=>item.bid===parsed.bid):null;if(!current)return;if(target.dataset.revisionIndex!==undefined){const revision=current.revisions[Number(target.dataset.revisionIndex)];paintDetail(revision.payload,current,`rev-${revision.revision_no}`);return}if(target.hasAttribute("data-revision-current")){paintDetail(current,current,"current");return}const action=target.dataset.action;if(action==="more")appendBatch();else if(action==="back")closeDetail();else if(action==="lightbox-close")closeLightbox();else if(action==="lightbox-prev"||action==="lightbox-next"){state.imageIndex=(state.imageIndex+(action.endsWith("next")?1:-1)+state.images.length)%state.images.length;paintLightbox()}else if(action==="zoom-in"||action==="zoom-out"){state.scale=Math.min(4,Math.max(.5,state.scale+(action.endsWith("in")?.25:-.25)));paintLightbox()}});
+let liveTimer=0;document.addEventListener("pointerdown",event=>{const live=event.target.closest("[data-live-photo]");if(live)liveTimer=window.setTimeout(()=>{live.dataset.longPressed="1";toggleLive(live)},420)});function clearLiveTimer(){window.clearTimeout(liveTimer);liveTimer=0}document.addEventListener("pointerup",event=>{clearLiveTimer();const live=event.target.closest("[data-live-photo]");if(live&&live.dataset.longPressed){delete live.dataset.longPressed;event.preventDefault()}});document.addEventListener("pointercancel",clearLiveTimer);
+document.addEventListener("keydown",event=>{if(event.key==="Escape"){if(!lightbox.hidden)closeLightbox();else if(!detail.hidden)closeDetail();return}if(!lightbox.hidden&&event.key==="Tab"){const controls=Array.from(lightbox.querySelectorAll("button:not([disabled]),[tabindex]"));const first=controls[0],last=controls[controls.length-1];if(document.activeElement===lightbox){event.preventDefault();(event.shiftKey?last:first).focus()}else if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus()}return}const image=event.target.closest("[data-local-image]");if(image&&(event.key==="Enter"||event.key===" ")){event.preventDefault();showLightbox(image.dataset.localImage,image);return}const card=event.target.closest("[data-bid]");if(card&&(event.key==="Enter"||event.key===" ")){event.preventDefault();openPost(card.dataset.bid)}if(!lightbox.hidden&&(event.key==="ArrowLeft"||event.key==="ArrowRight")){document.querySelector(`[data-action="lightbox-${event.key==="ArrowLeft"?"prev":"next"}"]`).click()}});
+lightbox.addEventListener("wheel",event=>{event.preventDefault();state.scale=Math.min(4,Math.max(.5,state.scale+(event.deltaY<0?.15:-.15)));paintLightbox()},{passive:false});const stage=lightbox.querySelector(".lightbox-stage");stage.addEventListener("pointerdown",event=>{state.drag=[event.clientX-state.x,event.clientY-state.y];stage.setPointerCapture(event.pointerId)});stage.addEventListener("pointermove",event=>{if(!state.drag)return;state.x=event.clientX-state.drag[0];state.y=event.clientY-state.drag[1];paintLightbox()});stage.addEventListener("pointerup",()=>state.drag=null);
+window.addEventListener("hashchange",()=>{const parsed=parseArchiveHash();if(parsed)openPost(parsed.bid,false,parsed.media);else if(location.hash!=="#print"&&!detail.hidden)closeDetail()});
+function renderCover(){const cover=el("section","pdf-cover");cover.append(avatar(archive.user.avatar_url,archive.user.screen_name),el("h1","",`${archive.user.screen_name} 的微博书`));const dates=archive.posts.map(post=>post.created_at).filter(Boolean);let range="";if(dates.length){let first=dates[0],last=dates[0];dates.forEach(value=>{if(value<first)first=value;if(value>last)last=value});range=`${first} 至 ${last}`}cover.append(el("p","pdf-cover-meta",[range,`共 ${archive.posts.length} 条微博`].filter(Boolean).join(" · ")));const now=new Date(),pad=value=>String(value).padStart(2,"0");cover.append(el("p","pdf-cover-date",`生成时间：${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`));return cover}
+function archiveMonths(){return archive.timeline&&archive.timeline.months?archive.timeline.months:[]}
+function renderToc(){const months=archiveMonths();if(!months.length)return document.createDocumentFragment();const toc=el("nav","pdf-toc");toc.append(el("h2","","目录"));let currentYear=null,list=null;months.forEach(month=>{if(month.year!==currentYear){currentYear=month.year;list=el("ul","pdf-toc-months");toc.append(el("div","pdf-toc-year",`${month.year} 年`),list)}const item=el("li"),link=el("a","",`${month.year} 年 ${month.month} 月（${month.end-month.start} 条）`);link.href=`#chapter-${month.key}`;item.append(link);list.append(item)});return toc}
+function renderAllPosts(){feed.replaceChildren();feedView.querySelectorAll(".pdf-cover,.pdf-toc").forEach(node=>node.remove());if(printStart===0)feedView.insertBefore(renderCover(),feed),feedView.insertBefore(renderToc(),feed);const starts=new Map(archiveMonths().map(month=>[month.start,month]));let normalIndex=-1;for(let index=0;index<printStart&&index<archive.posts.length;index+=1)if(archive.posts[index].is_pinned!==true)normalIndex+=1;let currentYear=null;const selected=archive.posts.slice(printStart,printStart+printLimit);selected.forEach(post=>{if(post.is_pinned!==true){normalIndex+=1;const month=starts.get(normalIndex);if(month){if(month.year!==currentYear){currentYear=month.year;const yearHeading=el("h2","pdf-chapter-year",`${month.year} 年`);yearHeading.id=`chapter-${month.year}`;feed.append(yearHeading)}const monthHeading=el("h3","pdf-chapter-month",`${month.year} 年 ${month.month} 月`);monthHeading.id=`chapter-${month.key}`;feed.append(monthHeading)}}feed.append(card(post))});state.shown=selected.length;more.hidden=true}
+function initialize(){if(printMode){document.body.classList.add("print-mode");renderAllPosts()}else{appendBatch();const initial=parseArchiveHash();if(initial)openPost(initial.bid,false,initial.media)}window.__WEISHUSHU_PRINT_READY__=true}
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",initialize);else initialize();
+})();
+</script>
+</body></html>
+{% else %}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ user.screen_name }} 的微博书</title>
+<style>
+  @page {
+    size: A4;
+    margin: 2cm 2.5cm;
+  }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  /* ========== v1.1.2 F3：仿微博 APP 设计 token ========== */
+  :root {
+    --wb-primary: #fa7d3c;     /* 微博蓝橙 */
+    --wb-bg: #f5f5f5;          /* 页面底色 */
+    --wb-card-bg: #ffffff;     /* 卡片白底 */
+    --wb-text: #1a1a1a;
+    --wb-text-2: #999;
+    --wb-radius: 12px;
+    --wb-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    --wb-shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.12);
+    --wb-gap: 8px;
+    --wb-blue: #1e90ff;        /* 蓝 V 标 */
+  }
+
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC",
+                 "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--wb-text);
+    background: var(--wb-bg);
+    padding: 20px;
+  }
+
+  /* ========== 封面 ========== */
+  .cover-page {
+    text-align: center;
+    padding: 80px 0 40px;
+    page-break-after: always;
+  }
+
+  .cover-page .avatar-large {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    object-fit: cover;
+    margin-bottom: 24px;
+    border: 3px solid #f0f0f0;
+  }
+
+  .cover-page h1 {
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 12px;
+  }
+
+  .cover-page .subtitle {
+    font-size: 16px;
+    color: #999;
+    margin-bottom: 40px;
+  }
+
+  .cover-page .stats {
+    display: flex;
+    justify-content: center;
+    gap: 40px;
+    margin-bottom: 40px;
+  }
+
+  .cover-page .stats .stat-item {
+    text-align: center;
+  }
+
+  .cover-page .stats .stat-num {
+    font-size: 22px;
+    font-weight: 700;
+    color: #eb7340;
+  }
+
+  .cover-page .stats .stat-label {
+    font-size: 12px;
+    color: #999;
+    margin-top: 4px;
+  }
+
+  .cover-page .bio {
+    max-width: 500px;
+    margin: 0 auto;
+    color: #666;
+    font-size: 14px;
+    line-height: 1.8;
+  }
+
+  .cover-page .meta {
+    margin-top: 50px;
+    color: #bbb;
+    font-size: 12px;
+  }
+
+  /* ========== 目录 ========== */
+  .toc-page {
+    page-break-after: always;
+    padding: 40px 0;
+  }
+
+  .toc-page h2 {
+    font-size: 22px;
+    margin-bottom: 24px;
+    color: #333;
+  }
+
+  .toc-page .toc-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid #f5f5f5;
+    color: #666;
+    font-size: 13px;
+  }
+
+  .toc-page .toc-num {
+    width: 40px;
+    color: #eb7340;
+    font-weight: 600;
+  }
+
+  .toc-page .toc-date {
+    width: 140px;
+    color: #999;
+  }
+
+  .toc-page .toc-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ========== 微博卡片（v1.1.2 仿微博 APP）========== */
+  .weibo-card {
+    background: var(--wb-card-bg);
+    border-radius: var(--wb-radius);
+    box-shadow: var(--wb-shadow);
+    padding: 16px;
+    margin-bottom: 12px;
+    page-break-inside: avoid;
+    transition: box-shadow 0.15s ease;
+  }
+  .weibo-card:hover {
+    box-shadow: var(--wb-shadow-hover);
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .card-header .avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+
+  .card-header .user-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .card-header .username {
+    font-size: 15px;
+    font-weight: 600;
+    color: #333;
+  }
+
+  .card-header .source {
+    display: inline-block;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+    font-size: 12px;
+    color: #999;
+    margin-left: 8px;
+  }
+
+  .card-header .time {
+    font-size: 12px;
+    color: #bbb;
+    flex-shrink: 0;
+  }
+
+  .card-body {
+    padding-left: 50px;
+  }
+
+  .card-body .text {
+    font-size: 15px;
+    line-height: 1.7;
+    color: #222;
+    word-wrap: break-word;
+    margin-bottom: 12px;
+  }
+
+  .card-body .location {
+    font-size: 13px;
+    color: #eb7340;
+    margin-bottom: 10px;
+  }
+
+  /* 媒体网格 */
+  .media-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-bottom: 12px;
+    max-width: 500px;
+  }
+
+  .media-grid .image-item img {
+    width: 100%;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  /* 单图 */
+  .media-item:only-child {
+    max-width: 300px;
+  }
+
+  /* 多图网格（v1.1.2 F3：补全 5-9 张规则 + 9 张 3×3）*/
+  .media-grid:has(.image-item:nth-child(2)) {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .media-grid:has(.image-item:nth-child(3)) {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .media-grid:has(.image-item:nth-child(4)) {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* F3 v1.1.2 补全：5-9 张图规则 */
+  .media-grid:has(.image-item:nth-child(5)),
+  .media-grid:has(.image-item:nth-child(6)) {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .media-grid:has(.image-item:nth-child(7)),
+  .media-grid:has(.image-item:nth-child(8)),
+  .media-grid:has(.image-item:nth-child(9)) {
+    grid-template-columns: repeat(3, 1fr);  /* 3×3 九宫格 */
+  }
+
+  /* F3 v1.1.2：所有媒体子项统一 1:1 方形（仿微博 APP） */
+  .image-item,
+  .video-item,
+  .live-photo-item {
+    aspect-ratio: 1 / 1;
+    overflow: hidden;
+    border-radius: 4px;
+  }
+
+  .image-item img,
+  .video-item img,
+  .live-photo-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #f2f2f2;
+    display: block;
+  }
+
+  /* F3 v1.1.2：蓝 V 标 */
+  .verified-icon {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    vertical-align: -2px;
+    margin-left: 4px;
+  }
+
+  /* F3 v1.1.2：性别图标 */
+  .gender-female { color: #ff5e8a; font-size: 12px; margin-left: 4px; }
+  .gender-male { color: #1e90ff; font-size: 12px; margin-left: 4px; }
+
+  /* F3 v1.1.2：互动栏（SVG 图标） */
+  .actions-bar {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    padding: 8px 0 0;
+    border-top: 1px solid #f0f0f0;
+    margin-top: 8px;
+  }
+  .action-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--wb-text-2);
+  }
+  .action-item svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+  }
+
+  .media-item {
+    position: relative;
+    overflow: hidden;
+    border-radius: 6px;
+  }
+
+  .media-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+
+  .link-card {
+    display: flex;
+    align-items: stretch;
+    min-height: 76px;
+    max-width: 500px;
+    margin: 10px 0 12px;
+    border: 1px solid #e5e5e5;
+    color: #333;
+    text-decoration: none;
+    background: #fafafa;
+    overflow: hidden;
+  }
+
+  .link-card-image {
+    width: 76px;
+    height: 76px;
+    flex: 0 0 76px;
+    object-fit: cover;
+    background: #eef0f5;
+  }
+
+  .link-card-body {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+    justify-content: center;
+    padding: 10px 12px;
+  }
+
+  .link-card-body strong,
+  .link-card-body small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .link-card-body small {
+    margin-top: 4px;
+    color: #999;
+  }
+
+  .video-item .play-icon {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 50px;
+    height: 50px;
+    background: rgba(0,0,0,0.6);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 22px;
+    pointer-events: none;
+  }
+
+  .duration-badge {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    background: rgba(0,0,0,0.7);
+    color: #fff;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .video-placeholder {
+    width: 100%;
+    aspect-ratio: 16/9;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 32px;
+    border-radius: 6px;
+  }
+
+  .video-item .video-link-row,
+  .live-photo-item .video-link-row {
+    margin-top: 4px;
+  }
+
+  .video-item .video-link,
+  .live-photo-item .video-link {
+    display: block;
+    text-align: center;
+    padding: 6px;
+    background: #f5f5f5;
+    border-radius: 4px;
+    color: #eb7340;
+    font-size: 13px;
+    text-decoration: none;
+  }
+
+  .video-item .video-link:hover,
+  .live-photo-item .video-link:hover {
+    background: #ffe8db;
+  }
+
+  .live-photo-item .live-badge {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(0,0,0,0.7);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 3px;
+    letter-spacing: 1px;
+  }
+
+  .retweet-label {
+    display: inline-block;
+    font-size: 11px;
+    background: #f0f0f0;
+    color: #999;
+    padding: 0 4px;
+    border-radius: 2px;
+    margin-right: 4px;
+  }
+
+  .retweeted-more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 80px;
+    height: 80px;
+    background: #f5f5f5;
+    border-radius: 4px;
+    color: #999;
+    font-size: 14px;
+  }
+
+  /* 转发卡片 */
+  .retweeted-card {
+    background: #f8f8f8;
+    border-radius: 6px;
+    padding: 12px;
+    margin-top: 10px;
+    font-size: 13px;
+  }
+
+  .retweeted-header {
+    margin-bottom: 6px;
+  }
+
+  .retweeted-username {
+    color: #eb7340;
+    font-weight: 600;
+  }
+
+  .retweeted-text {
+    color: #555;
+    line-height: 1.6;
+    word-wrap: break-word;
+  }
+
+  .retweeted-media {
+    display: flex;
+    gap: 4px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+
+  .retweeted-img {
+    width: 80px;
+    height: 80px;
+    object-fit: cover;
+    border-radius: 4px;
+  }
+
+  /* 底部统计 */
+  .card-footer {
+    padding-left: 50px;
+    display: flex;
+    gap: 24px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: #999;
+  }
+
+  /* 评论区域 */
+  .comments-section {
+    padding-left: 50px;
+    margin-top: 12px;
+    border-top: 1px dashed #eee;
+    padding-top: 10px;
+  }
+
+  .comments-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #666;
+    margin-bottom: 8px;
+  }
+
+  .comment-item {
+    display: flex;
+    gap: 8px;
+    padding: 6px 0;
+  }
+
+  .comment-item.comment-blogger {
+    background: #fff8f0;
+    margin: 0 -8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+  }
+
+  .comment-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .comment-body {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .comment-user {
+    font-size: 12px;
+    font-weight: 600;
+    color: #eb7340;
+    margin-bottom: 2px;
+  }
+
+  .comment-user .blogger-tag {
+    display: inline-block;
+    font-size: 10px;
+    background: #ffeadb;
+    color: #eb7340;
+    padding: 0 4px;
+    border-radius: 2px;
+    margin-left: 4px;
+  }
+
+  .comment-text {
+    font-size: 13px;
+    color: #333;
+    line-height: 1.5;
+  }
+
+  .comment-footer {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: #bbb;
+    margin-top: 2px;
+  }
+
+  /* ========== 页脚 ========== */
+  .footer-page {
+    text-align: center;
+    padding: 40px 0;
+    color: #ccc;
+    font-size: 12px;
+    page-break-before: always;
+  }
+
+  /* 打印支持 */
+  @media print {
+    body {
+      padding: 0;
+    }
+    .weibo-card {
+      display: block;
+      width: 100%;
+      page-break-inside: avoid !important;
+      break-inside: avoid-page !important;
+    }
+    .media-item img {
+      max-height: 300px;
+      object-fit: contain;
+    }
+    .footer-page {
+      display: none;
+    }
+  }
+</style>
+</head>
+<body>
+  <!-- 封面 -->
+  <div class="cover-page">
+    <img class="avatar-large" src="{{ user.avatar_url }}" alt=""
+         onerror="this.style.display='none'">
+    <h1>{{ user.screen_name }}</h1>
+    {% if user.verified_reason %}
+      <p class="subtitle">{{ user.verified_reason }}</p>
+    {% endif %}
+    <div class="stats">
+      <div class="stat-item">
+        <div class="stat-num">{{ user.posts_count }}</div>
+        <div class="stat-label">微博</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">{{ user.following_count }}</div>
+        <div class="stat-label">关注</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">{{ user.followers_count }}</div>
+        <div class="stat-label">粉丝</div>
+      </div>
+    </div>
+    {% if user.description %}
+      <div class="bio">{{ user.description }}</div>
+    {% endif %}
+    {% if user.location %}
+      <div class="bio">📍 {{ user.location }}</div>
+    {% endif %}
+    <div class="meta">
+      共 {{ posts | length }} 条微博 · 由 微博书 生成 · {{ generate_date }}
+    </div>
+  </div>
+
+  <!-- 目录 -->
+  <div class="toc-page">
+    <h2>📖 目录</h2>
+    {% for post in posts %}
+      <div class="toc-item">
+        <span class="toc-num">{{ loop.index }}</span>
+        <span class="toc-date">{{ post.created_at.strftime('%Y-%m-%d %H:%M') if post.created_at else '' }}</span>
+        <span class="toc-text">{{ post.text | striptags | truncate(60) }}</span>
+      </div>
+    {% endfor %}
+  </div>
+
+  <!-- 正文 -->
+  {% for post in posts %}
+    {% include 'card.html' %}
+  {% endfor %}
+
+  <!-- 页脚 -->
+  <div class="footer-page">
+    <p>📱 微博书 - 由 Weibo Book 生成</p>
+    <p>{{ generate_date }}</p>
+  </div>
+  <script>window.__WEISHUSHU_PRINT_READY__ = true;</script>
+</body>
+</html>
+{% endif %}

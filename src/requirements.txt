@@ -1,0 +1,2 @@
+# Mac 主线开发入口；Windows 端历史构建使用 requirements/windows.txt。
+-r requirements/mac.txt

@@ -1,0 +1,76 @@
+{
+  "fixture_schema": 1,
+  "source": {
+    "captured_at": "2026-07-17",
+    "official_page": "https://weibo.com/u/page/follow/<SELF_UID>",
+    "authenticated": true,
+    "read_only": true,
+    "request": {
+      "path": "/ajax/profile/topicContent",
+      "query": {
+        "tabid": "231093_-_chaohua"
+      }
+    }
+  },
+  "observation": {
+    "kind": "followed_supertopics_page_1",
+    "original_item_count": 7,
+    "notes": [
+      "max_page=1，本次响应为完整分页结果",
+      "列表未提供关注日期或关注天数"
+    ]
+  },
+  "response": {
+    "data": {
+      "name": "测试博主",
+      "list": [
+        {
+          "title": "测试超话",
+          "content1": "测试值",
+          "content2": "测试值",
+          "link": "//weibo.com/p/10080800000000000000000000000000000000",
+          "linkType": "测试值",
+          "pic": "https://example.invalid/resource",
+          "oid": "1022:10080800000000000000000000000000000000",
+          "topic_name": "测试超话",
+          "latest_status": "https://example.invalid/resource",
+          "scheme": "sinaweibo://pageinfo?containerid=10080800000000000000000000000000000000",
+          "status_count": 0,
+          "follow_count": 0,
+          "intro": "测试值",
+          "sub_desc": "",
+          "following": true
+        }
+      ],
+      "total_number": 7,
+      "pageType": "测试值",
+      "max_page": 1,
+      "fixedData": [
+        {
+          "name": "测试博主",
+          "list": [
+            {
+              "title": "测试超话",
+              "content1": "",
+              "content2": 0,
+              "link": "//weibo.com/p/10080800000000000000000000000000000000",
+              "linkType": "测试值",
+              "oid": "1022:10080800000000000000000000000000000000",
+              "pic": "https://example.invalid/resource",
+              "topic_name": "测试超话",
+              "latest_status": "https://example.invalid/resource",
+              "scheme": "sinaweibo://pageinfo?containerid=10080800000000000000000000000000000000",
+              "status_count": 0,
+              "follow_count": 1,
+              "intro": "",
+              "sub_desc": "",
+              "following": true
+            }
+          ],
+          "pageType": "测试值"
+        }
+      ]
+    },
+    "ok": 1
+  }
+}

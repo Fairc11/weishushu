@@ -1,0 +1,52 @@
+{
+  "fixture_schema": 1,
+  "source": {
+    "captured_at": "2026-07-17",
+    "official_page": "https://weibo.com/u/page/follow/<SELF_UID>",
+    "authenticated": true,
+    "read_only": true,
+    "request": {
+      "path": "/ajax/profile/followContent",
+      "query": {
+        "sortType": "all",
+        "page": 2,
+        "next_cursor": 50
+      }
+    }
+  },
+  "observation": {
+    "kind": "following_bloggers_final_page",
+    "original_item_count": 41,
+    "notes": [
+      "next_cursor=0 表示终页",
+      "同一参数多次真实读取中，has_filtered_attentions 曾分别返回 true 和 false，不能作为唯一完整性依据",
+      "对象字段结构与 following_page_1.json 相同，本文件不重复保存个人对象样本"
+    ]
+  },
+  "response": {
+    "data": {
+      "specialAttention": {
+        "name": "测试博主",
+        "users": [],
+        "list_id": "测试值"
+      },
+      "follows": {
+        "users": [],
+        "has_filtered_attentions": true,
+        "next_cursor": 0,
+        "previous_cursor": 50,
+        "total_number": 92,
+        "use_sink_stragety": false,
+        "has_filtered_fans": false,
+        "use_status_strategy": false,
+        "show_related_topic": false,
+        "sort_type": 0,
+        "type": 0,
+        "show_unread": false,
+        "fill_material": 0
+      },
+      "total_number": 99
+    },
+    "ok": 1
+  }
+}

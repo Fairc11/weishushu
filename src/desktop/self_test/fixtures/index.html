@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>微书薯自检</title></head>
+<body data-weishushu-version="">
+<h1>offline self-test page</h1>
+<script>
+window.addEventListener('pywebviewready', async function () {
+  try {
+    const version = await window.pywebview.api.get_version();
+    document.body.setAttribute('data-weishushu-version', version);
+  } catch (error) {
+    document.body.setAttribute('data-weishushu-version', 'ERROR:' + String(error));
+  }
+});
+</script>
+</body>
+</html>
