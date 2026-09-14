@@ -1,21 +1,54 @@
 <div align="center">
-  <img src="assets/icon.png" alt="微书薯图标" width="104" />
+  <img src="assets/icon.png" alt="微书薯图标" width="144" />
   <h1>微书薯 Weishushu</h1>
   <p><strong>把你的微博，备份成一本可以永远保存的书</strong></p>
   <p>互动 HTML · PDF · Markdown · 本地媒体档案</p>
   <p>
-    <a href="../../releases/latest"><img src="https://img.shields.io/badge/版本-v2.1.0-fa7d3c" alt="版本" /></a>
     <img src="https://img.shields.io/badge/macOS-Apple%20Silicon-000000?logo=apple" alt="macOS" />
     <img src="https://img.shields.io/badge/Windows-x64-0078D4?logo=windows" alt="Windows" />
     <img src="https://img.shields.io/badge/免费-无广告%20·%20无云端-brightgreen" alt="免费无广告" />
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-fa7d3c" alt="MIT 许可证" /></a>
+  </p>
+  <p>
+    <a href="https://github.com/Fairc11/weishushu/releases/latest">下载最新版本</a>　·　
+    <a href="https://github.com/Fairc11/weishushu/releases">更新记录</a>　·　
+    <a href="https://github.com/Fairc11/weishushu/issues">问题反馈</a>
   </p>
 </div>
 
 > **风险须知**：微书薯仅支持单设备、单进程、单登录状态的个人归档用途，使用前请阅读[风险与使用边界](src/RISKS.md)。10 不做：评论发布、点赞自动化、关注自动化、转发自动化、多账号池、代理池、Cookie 池或账号包、验证码绕过、OAuth 商业用途、跨设备同步登录。
 
----
 
-## 界面预览
+## 下载与安装
+
+选择你的系统，下载安装包即可使用。
+
+| macOS | Windows |
+|---|---|
+| Apple Silicon · macOS 12 及以上 | Windows 10 / 11 · x64 |
+| [下载 macOS 安装包](https://github.com/Fairc11/weishushu/releases/latest) | [下载 Windows 安装包](https://github.com/Fairc11/weishushu/releases/latest) |
+| 打开 DMG，拖入「应用程序」 | 运行安装程序，按提示安装 |
+
+免费使用，无广告。安装包已包含运行所需组件，不需要另行安装 Python、Chrome、Playwright 或 Docker。下载页提供 `.sha256` 校验文件。[历史版本与更新说明](https://github.com/Fairc11/weishushu/releases)。
+
+<details>
+<summary>首次安装遇到系统安全提示？</summary>
+
+> **关于安全警告**：安装包当前使用 ad-hoc 签名、未经 Apple 公证与微软代码签名，首次打开时 macOS Gatekeeper / Windows SmartScreen 会提示拦截，这是正常现象。放行方法：
+>
+> - **macOS**：先正常双击一次（会被拦截），然后打开「系统设置 → 隐私与安全性」，在「安全性」一栏找到 Weishushu 的拦截记录，点「仍要打开」（如下图）。如果弹窗只有「完成 / 移到废纸篓」两个按钮且设置里找不到记录，在「终端」执行一行命令即可永久放行：`xattr -dr com.apple.quarantine /Applications/Weishushu.app`
+>
+>   <img src="assets/screenshots/gatekeeper-allow.png" alt="macOS 隐私与安全性中的仍要打开按钮位置" width="640" />
+>
+> - **Windows**：在 SmartScreen 弹窗选择「更多信息 → 仍要运行」。
+>
+> 下载后可用页面提供的 SHA-256 校验文件确认安装包未被篡改。
+
+</details>
+
+## 保存下来，也方便翻阅
+
+按时间浏览微博，打开图片与视频，查看单条微博的完整内容。
 
 <table>
   <tr>
@@ -36,26 +69,14 @@
   </tr>
 </table>
 
-## 下载
+## 从备份到阅读
 
-| 平台 | 文件 | 说明 |
-|------|------|------|
-| macOS（Apple Silicon，macOS 12+） | [Weishushu-v2.1.0-macOS-arm64.dmg](../../releases/latest/download/Weishushu-v2.1.0-macOS-arm64.dmg) | 拖入「应用程序」即可 |
-| Windows 10/11 x64 | [Weishushu_Setup_v2.1.0.exe](../../releases/latest/download/Weishushu_Setup_v2.1.0.exe) | 安装程序，含卸载 |
+| 保存微博 | 离线翻阅 | 管理档案 |
+|---|---|---|
+| 本人及其他博主备份<br>分段备份与增量更新<br>超话补漏<br>图片、视频与实况照片 | 年月时间目录<br>正文搜索与详情查看<br>微博、超话与相册<br>HTML / PDF / Markdown | 微博书库集中管理<br>补充更早的微博<br>档案大小与存储总览<br>本地保存与跨目录登记 |
 
-当前版本 **v2.1.0**（2026-09-14 发布）。每个 Release 都附带对应的 `.sha256` 校验文件，历史版本与完整更新说明见 [Releases](../../releases)。安装包已包含运行所需组件，不需要另行安装 Python、Chrome、Playwright 或 Docker。
-
-> **关于安全警告**：安装包当前使用 ad-hoc 签名、未经 Apple 公证与微软代码签名，首次打开时 macOS Gatekeeper / Windows SmartScreen 会提示拦截，这是正常现象。放行方法：
->
-> - **macOS**：先正常双击一次（会被拦截），然后打开「系统设置 → 隐私与安全性」，在「安全性」一栏找到 Weishushu 的拦截记录，点「仍要打开」（如下图）。如果弹窗只有「完成 / 移到废纸篓」两个按钮且设置里找不到记录，在「终端」执行一行命令即可永久放行：`xattr -dr com.apple.quarantine /Applications/Weishushu.app`
->
->   <img src="assets/screenshots/gatekeeper-allow.png" alt="macOS 隐私与安全性中的仍要打开按钮位置" width="640" />
->
-> - **Windows**：在 SmartScreen 弹窗选择「更多信息 → 仍要运行」。
->
-> 下载后可用页面提供的 SHA-256 校验文件确认安装包未被篡改。
-
-## 功能
+<details>
+<summary>展开完整功能说明</summary>
 
 **备份与档案**
 
@@ -76,7 +97,7 @@
 - **混合媒体一条不漏**：同一条微博里图片和视频混发（最多 18 项）也能完整归档、混排展示
 - **评论提取**：每条微博归档最新一级评论与关联回复，评论里的图片也离线保存在本地
 - **资料页**：那年今天、置顶变迁、头像相册（含历史头像）、封面横幅、粉丝变迁
-- **版式自动升级**：老版本生成的微博书会被识别出版式（V1/V2/V3），可一键用最新版式重新生成，纯本地完成，不联网、不改动数据与媒体
+- **版式升级**：V2 互动档案可在本地重新生成 V3 版式，不联网、不改动数据与媒体；V1 旧索引档案需要重新备份
 - **关注资料页签**：归档你关注的博主与超话资料，和时间轴一起翻阅（仅本人档案）
 
 **导出与整理**
@@ -95,12 +116,51 @@
 - **退出登录**：一键清除本机登录状态；卸载时可选择清理全部应用数据，只保留你自己的微博书档案
 - **浅色 / 深色双主题**：跟随系统或手动切换
 
-## 快速上手
+</details>
 
-1. 下载并安装，首次启动会看到一份风险须知，**滚动阅读到底部**后确认继续。
-2. 点击「登录」，用微博 App 扫描二维码（两分钟内有效，扫描后在手机上确认）。
-3. 「备份本人」挑一个保存目录开始首次建档；「备份他人」搜索昵称或粘贴链接，选中博主后选择保存位置。
-4. 完成后双击档案里的 `微博书.html`，离线翻阅你的微博书；之后在「微博书库」点「新增备份」即可持续更新。
+## 四步开始
+
+1. **安装并打开**：阅读首次启动时的风险须知，滚动阅读到底部后确认继续。
+2. **扫码登录**：点击「登录」，使用微博 App 扫码，无需在工具中输入密码。
+3. **选择备份**：选择「备份本人」或「备份他人」，指定保存目录与备份范围。
+4. **离线翻阅**：打开档案中的 `微博书.html`；后续在「微博书库」中点击「新增备份」继续更新。
+
+## 常见问题
+
+<details>
+<summary>微博书保存在哪里？</summary>
+
+保存在你自己选择的本地目录，登录状态不会随档案复制；换电脑后在新环境重新登录即可。
+
+</details>
+
+<details>
+<summary>要把微博书拷到别的电脑或发给别人？</summary>
+
+整个档案文件夹一起拷（HTML 依赖旁边的「数据与媒体」文件夹）；通过网盘或微信传输时建议先压缩成一个 zip。每个档案里的「!请先阅读.txt」有详细说明。
+
+</details>
+
+<details>
+<summary>登录数据保存在何处？</summary>
+
+登录 Cookie 只写入当前设备的当前用户环境，文件权限收紧到仅本人可读，不上传任何服务器。
+
+</details>
+
+<details>
+<summary>软件收费吗？</summary>
+
+不收费，也没有广告和任何云端服务。
+
+</details>
+
+<details>
+<summary>为什么首次打开会被系统拦截？</summary>
+
+安装包是 ad-hoc 签名、未购买商业代码签名证书，系统可能因此显示安全提示。用上面「关于安全警告」里的方法放行即可，SHA-256 校验值会随每个 Release 提供。
+
+</details>
 
 ## 它不会做什么（10 不做）
 
@@ -117,28 +177,16 @@
 - 登录数据不属于微博书档案，不随档案复制，不应上传、分享或跨设备同步。
 - 换机、Cookie 过期或微博登录状态失效后，需要在新环境中重新登录。
 
-## 常见问题
-
-**微博书保存在哪里？**
-保存在你自己选择的本地目录，登录状态不会随档案复制；换电脑后在新环境重新登录即可。
-
-**要把微博书拷到别的电脑或发给别人？**
-整个档案文件夹一起拷（HTML 依赖旁边的「数据与媒体」文件夹）；通过网盘或微信传输时建议先压缩成一个 zip。每个档案里的「!请先阅读.txt」有详细说明。
-
-**会泄露我的账号吗？**
-不会。登录 Cookie 只写入当前设备的当前用户环境，文件权限收紧到仅本人可读，不上传任何服务器。
-
-**软件收费吗？**
-不收费，也没有广告和任何云端服务。
-
-**为什么首次打开会被系统拦截？**
-安装包是 ad-hoc 签名、未购买商业代码签名证书，系统的拦截提示针对的是「未签名」而非「有毒」。用上面「关于安全警告」里的方法放行即可，SHA-256 校验值会随每个 Release 提供。
-
 ## 问题反馈
 
-遇到问题或有功能建议，直接在 [GitHub Issues](../../issues) 提交即可。反馈问题时请附上：你的系统版本（macOS / Windows）、操作到哪一步出错、界面上的中文错误提示原文。**不要**在 Issue 里贴 Cookie、账号密码或微博正文等隐私内容。
+遇到问题或有功能建议，直接在 [GitHub Issues](https://github.com/Fairc11/weishushu/issues) 提交即可。反馈问题时请附上：你的系统版本（macOS / Windows）、操作到哪一步出错、界面上的中文错误提示原文。**不要**在 Issue 里贴 Cookie、账号密码或微博正文等隐私内容。
 
-## 源代码
+## 源代码与许可
+
+源代码以 [MIT 许可证](LICENSE)公开。[查看源代码](src/) · [构建与开发说明](src/docs/DEVELOPMENT.md)
+
+<details>
+<summary>源码目录与版本说明</summary>
 
 核心源代码已在本仓库公开，全部位于 `src/` 目录：
 
@@ -158,10 +206,8 @@ src
 └── docs/               构建与开发说明
 ```
 
-克隆后进入 `src/` 目录，按[开发说明](src/docs/DEVELOPMENT.md)可以从源码自行构建出相同的安装包。
+克隆后进入 `src/` 目录，按[开发说明](src/docs/DEVELOPMENT.md)可以构建该源码版本的安装包；不代表与最新 Release 安装包对应同一版本。
 
 > 当前公开的源码为 v2.0.1 的审计导出；Release 安装包包含 v2.1.0 的全部功能，新版源码的公开导出随后另行进行。
 
-## 许可
-
-源代码以 [MIT 许可证](LICENSE)公开。
+</details>
