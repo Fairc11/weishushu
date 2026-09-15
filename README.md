@@ -63,13 +63,15 @@
 
 按时间浏览微博，打开图片与视频，查看单条微博的完整内容。
 
+以下为当前界面的演示截图，账号、正文、评论、配图及统计值均为演示数据。
+
 <table>
   <tr>
     <td><img src="assets/screenshots/book-grid.png" alt="微博书时间轴" /></td>
     <td><img src="assets/screenshots/book-detail.png" alt="微博详情与评论" /></td>
   </tr>
   <tr>
-    <td align="center">微博书时间轴 · 九宫格与实况照片</td>
+    <td align="center">微博书时间轴 · 时间目录与九宫格</td>
     <td align="center">单条微博详情 · 评论与关联回复</td>
   </tr>
   <tr>
@@ -77,8 +79,8 @@
     <td><img src="assets/screenshots/home-dark.png" alt="主界面深色" /></td>
   </tr>
   <tr>
-    <td align="center">主界面 · 浅色主题</td>
-    <td align="center">主界面 · 深色主题</td>
+    <td align="center">微博书库 · 浅色主题</td>
+    <td align="center">微博书库 · 深色主题</td>
   </tr>
 </table>
 
@@ -91,9 +93,9 @@
     <th width="320" align="center">管理档案</th>
   </tr>
   <tr>
-    <td align="left">本人及其他博主备份<br>分段备份与增量更新<br>超话补漏<br>图片、视频与实况照片</td>
-    <td align="left">年月时间目录<br>正文搜索与详情查看<br>微博、超话与相册<br>HTML / PDF / Markdown</td>
-    <td align="left">微博书库集中管理<br>补充更早的微博<br>档案大小与存储总览<br>本地保存与跨目录登记</td>
+    <td align="center">本人及其他博主备份<br>分段备份与增量更新<br>超话补漏<br>图片、视频与实况照片</td>
+    <td align="center">年月时间目录<br>正文搜索与详情查看<br>微博、超话与相册<br>HTML / PDF / Markdown</td>
+    <td align="center">微博书库集中管理<br>补充更早的微博<br>档案大小与存储总览<br>本地保存与跨目录登记</td>
   </tr>
 </table>
 
