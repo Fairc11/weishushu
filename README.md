@@ -23,11 +23,24 @@
 
 选择你的系统，下载安装包即可使用。
 
-| macOS | Windows |
-|---|---|
-| Apple Silicon · macOS 12 及以上 | Windows 10 / 11 · x64 |
-| [下载 macOS 安装包](https://github.com/Fairc11/weishushu/releases/latest) | [下载 Windows 安装包](https://github.com/Fairc11/weishushu/releases/latest) |
-| 打开 DMG，拖入「应用程序」 | 运行安装程序，按提示安装 |
+<table align="center">
+  <tr>
+    <th width="480" align="center">macOS</th>
+    <th width="480" align="center">Windows</th>
+  </tr>
+  <tr>
+    <td align="center">Apple Silicon · macOS 12 及以上</td>
+    <td align="center">Windows 10 / 11 · x64</td>
+  </tr>
+  <tr>
+    <td align="center"><a href="https://github.com/Fairc11/weishushu/releases/latest">下载 macOS 安装包</a></td>
+    <td align="center"><a href="https://github.com/Fairc11/weishushu/releases/latest">下载 Windows 安装包</a></td>
+  </tr>
+  <tr>
+    <td align="center">打开 DMG，拖入「应用程序」</td>
+    <td align="center">运行安装程序，按提示安装</td>
+  </tr>
+</table>
 
 免费使用，无广告。安装包已包含运行所需组件，不需要另行安装 Python、Chrome、Playwright 或 Docker。下载页提供 `.sha256` 校验文件。[历史版本与更新说明](https://github.com/Fairc11/weishushu/releases)。
 
@@ -71,9 +84,18 @@
 
 ## 从备份到阅读
 
-| 保存微博 | 离线翻阅 | 管理档案 |
-|---|---|---|
-| 本人及其他博主备份<br>分段备份与增量更新<br>超话补漏<br>图片、视频与实况照片 | 年月时间目录<br>正文搜索与详情查看<br>微博、超话与相册<br>HTML / PDF / Markdown | 微博书库集中管理<br>补充更早的微博<br>档案大小与存储总览<br>本地保存与跨目录登记 |
+<table align="center">
+  <tr>
+    <th width="320" align="center">保存微博</th>
+    <th width="320" align="center">离线翻阅</th>
+    <th width="320" align="center">管理档案</th>
+  </tr>
+  <tr>
+    <td align="left">本人及其他博主备份<br>分段备份与增量更新<br>超话补漏<br>图片、视频与实况照片</td>
+    <td align="left">年月时间目录<br>正文搜索与详情查看<br>微博、超话与相册<br>HTML / PDF / Markdown</td>
+    <td align="left">微博书库集中管理<br>补充更早的微博<br>档案大小与存储总览<br>本地保存与跨目录登记</td>
+  </tr>
+</table>
 
 <details>
 <summary>展开完整功能说明</summary>
