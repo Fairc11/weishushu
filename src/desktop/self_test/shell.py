@@ -39,7 +39,7 @@ SHELL_STEPS = (
     "shell_cookie",
     "shell_exit",
 )
-CURRENT_VERSION = "2.0.0"
+from backend.app.version import VERSION as CURRENT_VERSION
 SHELL_TIMEOUT = 15.0
 
 

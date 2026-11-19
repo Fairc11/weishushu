@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from .media_layout import MEDIA_LAYOUT_VERSION, MEDIA_LAYOUT_VERSION_KEY
+from .paths import DATABASE_NAME, MANIFEST_NAME
 
 
-SCHEMA_VERSION = 2
-MANIFEST_NAME = "manifest.json"
-DATABASE_NAME = "archive.db"
+SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,31 @@ class MediaRecord:
     remote_url: str
     local_path: str
     sha256: str = ""
+
+
+@dataclass(frozen=True)
+class ProfileAssetRecord:
+    kind: str
+    remote_url: str
+    local_path: str
+    sha256: str
+    first_seen_at: str
+    run_id: str
+
+
+@dataclass(frozen=True)
+class PinObservationRecord:
+    run_id: str
+    observed_at: str
+    bid: str
+    pin_order: int | None
+
+
+@dataclass(frozen=True)
+class FansObservationRecord:
+    run_id: str
+    observed_at: str
+    followers_count: int
 
 
 _SCHEMA_V1 = """
@@ -218,6 +244,37 @@ INSERT OR IGNORE INTO following_state(singleton,current_snapshot_id)
 VALUES (1,NULL);
 """
 
+_SCHEMA_V3_ADDITIONS = """
+CREATE TABLE IF NOT EXISTS profile_assets(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK(kind IN ('avatar','cover')),
+    remote_url TEXT NOT NULL,
+    local_path TEXT NOT NULL DEFAULT '',
+    sha256 TEXT NOT NULL DEFAULT '',
+    first_seen_at TEXT NOT NULL,
+    run_id TEXT NOT NULL DEFAULT '',
+    UNIQUE(kind, remote_url)
+);
+CREATE TABLE IF NOT EXISTS pin_observations(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL DEFAULT '',
+    observed_at TEXT NOT NULL,
+    bid TEXT NOT NULL,
+    pin_order INTEGER,
+    UNIQUE(run_id, bid)
+);
+"""
+
+_SCHEMA_V4_ADDITIONS = """
+CREATE TABLE IF NOT EXISTS fans_observations(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL DEFAULT '',
+    observed_at TEXT NOT NULL,
+    followers_count INTEGER NOT NULL,
+    UNIQUE(run_id)
+);
+"""
+
 _EXPECTED_V1_TABLE_COLUMNS = {
     "archive_meta": [
         (0, "key", "TEXT", 0, None, 1),
@@ -276,7 +333,7 @@ _EXPECTED_V1_TABLE_COLUMNS = {
     ],
 }
 
-_EXPECTED_TABLE_COLUMNS = {
+_EXPECTED_V2_TABLE_COLUMNS = {
     **_EXPECTED_V1_TABLE_COLUMNS,
     "following_snapshots": [
         (0, "snapshot_id", "TEXT", 0, None, 1),
@@ -344,6 +401,36 @@ _EXPECTED_TABLE_COLUMNS = {
     ],
 }
 
+_EXPECTED_V3_TABLE_COLUMNS = {
+    **_EXPECTED_V2_TABLE_COLUMNS,
+    "profile_assets": [
+        (0, "id", "INTEGER", 0, None, 1),
+        (1, "kind", "TEXT", 1, None, 0),
+        (2, "remote_url", "TEXT", 1, None, 0),
+        (3, "local_path", "TEXT", 1, "''", 0),
+        (4, "sha256", "TEXT", 1, "''", 0),
+        (5, "first_seen_at", "TEXT", 1, None, 0),
+        (6, "run_id", "TEXT", 1, "''", 0),
+    ],
+    "pin_observations": [
+        (0, "id", "INTEGER", 0, None, 1),
+        (1, "run_id", "TEXT", 1, "''", 0),
+        (2, "observed_at", "TEXT", 1, None, 0),
+        (3, "bid", "TEXT", 1, None, 0),
+        (4, "pin_order", "INTEGER", 0, None, 0),
+    ],
+}
+
+_EXPECTED_TABLE_COLUMNS = {
+    **_EXPECTED_V3_TABLE_COLUMNS,
+    "fans_observations": [
+        (0, "id", "INTEGER", 0, None, 1),
+        (1, "run_id", "TEXT", 1, "''", 0),
+        (2, "observed_at", "TEXT", 1, None, 0),
+        (3, "followers_count", "INTEGER", 1, None, 0),
+    ],
+}
+
 _EXPECTED_FOREIGN_KEYS = {
     "post_revisions": [
         (0, 0, "posts", "bid", "bid", "NO ACTION", "CASCADE", "NONE")
@@ -376,7 +463,7 @@ _EXPECTED_FOREIGN_KEYS = {
     ],
 }
 
-_EXPECTED_UNIQUE_INDEX_COLUMNS = {
+_EXPECTED_V2_UNIQUE_INDEX_COLUMNS = {
     "post_revisions": {("bid", "revision_no")},
     "media": {("owner_type", "owner_id", "role", "position")},
     "following_snapshot_items": {
@@ -395,6 +482,17 @@ _EXPECTED_UNIQUE_INDEX_COLUMNS = {
     "following_changes": {
         ("snapshot_id", "change_type", "object_type", "object_id"),
     },
+}
+
+_EXPECTED_V3_UNIQUE_INDEX_COLUMNS = {
+    **_EXPECTED_V2_UNIQUE_INDEX_COLUMNS,
+    "profile_assets": {("kind", "remote_url")},
+    "pin_observations": {("run_id", "bid")},
+}
+
+_EXPECTED_UNIQUE_INDEX_COLUMNS = {
+    **_EXPECTED_V3_UNIQUE_INDEX_COLUMNS,
+    "fans_observations": {("run_id",)},
 }
 
 _EXPECTED_PARTIAL_UNIQUE_INDEX_SQL = {
@@ -417,7 +515,7 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA foreign_keys=ON")
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA synchronous=FULL")
-    connection.executescript(_SCHEMA_V1 + _SCHEMA_V2_ADDITIONS)
+    connection.executescript(_SCHEMA_V1 + _SCHEMA_V2_ADDITIONS + _SCHEMA_V3_ADDITIONS + _SCHEMA_V4_ADDITIONS)
     connection.execute(
         "INSERT OR REPLACE INTO archive_meta(key, value_json) VALUES (?, ?)",
         (
@@ -452,24 +550,99 @@ def validate_schema_v1(connection: sqlite3.Connection) -> None:
         "post_revisions": _EXPECTED_FOREIGN_KEYS["post_revisions"],
         "comments": _EXPECTED_FOREIGN_KEYS["comments"],
     }, {
-        "post_revisions": _EXPECTED_UNIQUE_INDEX_COLUMNS["post_revisions"],
-        "media": _EXPECTED_UNIQUE_INDEX_COLUMNS["media"],
+        "post_revisions": _EXPECTED_V2_UNIQUE_INDEX_COLUMNS["post_revisions"],
+        "media": _EXPECTED_V2_UNIQUE_INDEX_COLUMNS["media"],
     })
 
 
-def migrate_schema(connection: sqlite3.Connection, source_version: int) -> None:
-    if source_version != 1:
+def validate_schema_v2(connection: sqlite3.Connection) -> None:
+    _validate_schema(
+        connection,
+        _EXPECTED_V2_TABLE_COLUMNS,
+        _EXPECTED_FOREIGN_KEYS,
+        _EXPECTED_V2_UNIQUE_INDEX_COLUMNS,
+    )
+    _validate_partial_unique_indexes(connection)
+
+
+def validate_schema_v3(connection: sqlite3.Connection) -> None:
+    _validate_schema(
+        connection,
+        _EXPECTED_V3_TABLE_COLUMNS,
+        _EXPECTED_FOREIGN_KEYS,
+        _EXPECTED_V3_UNIQUE_INDEX_COLUMNS,
+    )
+    _validate_partial_unique_indexes(connection)
+
+
+_SEED_TIMESTAMP_PATTERN = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?"
+)
+
+
+def _seed_observed_at(connection: sqlite3.Connection, fallback: str) -> str:
+    """决定迁移播种的观察时间：archive_meta → manifest 值 → 当前时间。"""
+    row = connection.execute(
+        "SELECT value_json FROM archive_meta WHERE key = 'last_successful_sync_at'"
+    ).fetchone()
+    candidates: list[object] = []
+    if row is not None:
+        try:
+            candidates.append(json.loads(row[0]))
+        except json.JSONDecodeError:
+            pass
+    candidates.append(fallback)
+    for value in candidates:
+        if isinstance(value, str) and _SEED_TIMESTAMP_PATTERN.fullmatch(value):
+            return value
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _legacy_seed_sql(seed_at: str) -> str:
+    return (
+        "\nINSERT OR IGNORE INTO pin_observations(run_id, observed_at, bid, pin_order)"
+        "\nSELECT 'legacy-seed', '"
+        + seed_at
+        + "', bid, pin_order FROM posts WHERE is_pinned = 1;"
+        "\nINSERT OR IGNORE INTO profile_assets("
+        "kind, remote_url, local_path, sha256, first_seen_at, run_id)"
+        "\nSELECT 'avatar', remote_url, local_path, sha256, '"
+        + seed_at
+        + "', 'legacy-seed'"
+        "\nFROM media WHERE owner_type = 'user' AND role = 'avatar';"
+    )
+
+
+def migrate_schema(
+    connection: sqlite3.Connection,
+    source_version: int,
+    *,
+    seed_observed_at: str = "",
+) -> None:
+    if source_version == 1:
+        validate_schema_v1(connection)
+    elif source_version == 2:
+        validate_schema_v2(connection)
+    elif source_version == 3:
+        validate_schema_v3(connection)
+    else:
         raise sqlite3.DatabaseError(f"不支持从归档版本 {source_version} 迁移")
-    validate_schema_v1(connection)
+    seed_at = _seed_observed_at(connection, seed_observed_at)
     version_json = json.dumps(SCHEMA_VERSION, ensure_ascii=False, sort_keys=True)
+    script = "BEGIN IMMEDIATE;\n"
+    if source_version == 1:
+        script += _SCHEMA_V2_ADDITIONS
+    if source_version in (1, 2):
+        script += _SCHEMA_V3_ADDITIONS
+        script += _legacy_seed_sql(seed_at)
+    script += _SCHEMA_V4_ADDITIONS
+    script += (
+        "\nUPDATE archive_meta SET value_json = '"
+        + version_json
+        + "' WHERE key = 'schema_version';\nCOMMIT;"
+    )
     try:
-        connection.executescript(
-            "BEGIN IMMEDIATE;\n"
-            + _SCHEMA_V2_ADDITIONS
-            + "\nUPDATE archive_meta SET value_json = '"
-            + version_json
-            + "' WHERE key = 'schema_version';\nCOMMIT;"
-        )
+        connection.executescript(script)
     except BaseException:
         if connection.in_transaction:
             connection.rollback()
@@ -484,6 +657,10 @@ def validate_schema(connection: sqlite3.Connection) -> None:
         _EXPECTED_FOREIGN_KEYS,
         _EXPECTED_UNIQUE_INDEX_COLUMNS,
     )
+    _validate_partial_unique_indexes(connection)
+
+
+def _validate_partial_unique_indexes(connection: sqlite3.Connection) -> None:
     for index_name, (table, expected_sql) in (
         _EXPECTED_PARTIAL_UNIQUE_INDEX_SQL.items()
     ):

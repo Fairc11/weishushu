@@ -132,16 +132,18 @@ def extract_media(crawl_post: CrawlPost, image_quality: ImageQuality = ImageQual
                     if 'media_info' in page_info:
                         duration = page_info['media_info'].get('duration')
                         if not video_url or 'weibo.com' not in video_url:
-                            video_url = page_info.get('media_info', {}).get('mp4_h265_url') or page_info.get('media_info', {}).get('mp4_720p_mp4') or page_info.get('media_info', {}).get('mp4_sd_url') or video_url
+                            media_info = page_info.get('media_info', {})
+                            video_url = media_info.get('mp4_h265_url') or media_info.get('mp4_720p_mp4') or media_info.get('stream_url_hd') or media_info.get('mp4_sd_url') or video_url
             except Exception as exc:
                 logger.debug('解析 page_info 视频 URL 失败: %s', exc)
+            seen_urls.add(video_url)
             media_list.append(PostMedia(type=MediaType.VIDEO, url=video_url, thumbnail=thumbnail, duration=duration))
 
     try:
         page_info = raw.get('page_info', {}) or {}
         if page_info and page_info.get('type') == 'video':
             media_info = page_info.get('media_info', {}) or {}
-            stream_url = media_info.get('mp4_h265_url') or media_info.get('mp4_720p_mp4') or media_info.get('mp4_sd_url') or media_info.get('stream_url') or ''
+            stream_url = media_info.get('mp4_h265_url') or media_info.get('mp4_720p_mp4') or media_info.get('stream_url_hd') or media_info.get('mp4_sd_url') or media_info.get('stream_url') or ''
             if stream_url and stream_url not in seen_urls:
                 seen_urls.add(stream_url)
                 thumbnail = None
@@ -298,6 +300,9 @@ def extract_link_card(crawl_post: CrawlPost) -> LinkCard | None:
     raw = parsed_raw.get(RAW_STATUS_KEY) or parsed_raw
     page_info = raw.get('page_info') or {}
     if not isinstance(page_info, dict):
+        return None
+    if (page_info.get('type') or '') in ('topic', 'search_topic'):
+        # 话题页卡片（方形图 + 0讨论0阅读）不作为引用卡片保留
         return None
     title = page_info.get('page_title') or ''
     page_url = page_info.get('page_url') or ''

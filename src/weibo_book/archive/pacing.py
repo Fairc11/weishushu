@@ -79,13 +79,20 @@ class AdaptiveRequestScheduler:
         wait: Callable[[float], None] = time.sleep,
         status_callback: Callable[[PacingStatus], None] | None = None,
         power_snapshot_provider: Callable[[], object] | None = None,
+        timings=None,
     ) -> None:
         self._mode = self._validate_mode(mode)
         self._pause_event = pause_event
         self._cancel_event = cancel_event
         self._monotonic = monotonic
         self._uniform = uniform
-        self._wait = wait
+        self._timings = timings
+        def measured_wait(seconds):
+            if timings is None:
+                return wait(seconds)
+            with timings.measure("wait"):
+                return wait(seconds)
+        self._wait = measured_wait
         self._status_callback = status_callback
         self._power_snapshot_provider = power_snapshot_provider
         self._wake_probe: Callable[[], None] | None = None
@@ -203,6 +210,13 @@ class AdaptiveRequestScheduler:
 
     def run(self, kind: RequestKind, operation: Callable[[], T]) -> T:
         """执行一次请求；低强度模式仅对网络失败进行一次延长等待和重试。"""
+
+        if self._timings is not None:
+            original_operation = operation
+            def measured_operation():
+                with self._timings.measure("request"):
+                    return original_operation()
+            operation = measured_operation
 
         self._ensure_open()
         request_kind = self._validate_request_kind(kind)

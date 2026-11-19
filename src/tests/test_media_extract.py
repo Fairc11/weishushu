@@ -230,5 +230,69 @@ class ExtractMediaBugFixTests(unittest.TestCase):
         self.assertEqual([item.type for item in media], [MediaType.IMAGE, MediaType.IMAGE, MediaType.VIDEO])
 
 
+class VideoQualityTests(unittest.TestCase):
+    def test_independent_video_url_upgraded_by_stream_url_hd(self):
+        """独立 video_url 分支：media_info 提供 stream_url_hd 时替换低清地址"""
+        ld = "https://f.video.weibocdn.com/o0/aaa.mp4?label=mp4_ld&template=360x640"
+        hd = "https://f.video.weibocdn.com/o0/aaa.mp4?label=mp4_hd&template=540x960"
+        page_info = {"media_info": {"stream_url": ld, "stream_url_hd": hd, "duration": 12}}
+        post = _make_crawl_post(video_url=ld, page_info=page_info)
+
+        media = extract_media(post)
+
+        videos = [item for item in media if item.type is MediaType.VIDEO]
+        self.assertEqual(len(videos), 1)
+        self.assertEqual(videos[0].url, hd)
+
+    def test_page_info_fallback_prefers_stream_url_hd_over_stream_url(self):
+        """page_info 兜底分支：stream_url_hd 优先于低清 stream_url"""
+        ld = "https://f.video.weibocdn.com/o0/bbb.mp4?label=mp4_ld&template=480x360"
+        hd = "https://f.video.weibocdn.com/o0/bbb.mp4?label=mp4_hd&template=852x480"
+        page_info = {
+            "type": "video",
+            "page_pic": {"url": "https://wx1.sinaimg.cn/large/cover.jpg"},
+            "media_info": {"stream_url": ld, "stream_url_hd": hd},
+        }
+        post = _make_crawl_post(pic_infos={}, pic_ids=[], page_info=page_info)
+
+        media = extract_media(post)
+
+        videos = [item for item in media if item.type is MediaType.VIDEO]
+        self.assertEqual(len(videos), 1)
+        self.assertEqual(videos[0].url, hd)
+
+    def test_low_quality_kept_when_no_hd_available(self):
+        """平台只给低清时保留低清地址（由归档补抓确认名单去重）"""
+        ld = "https://f.video.weibocdn.com/o0/ccc.mp4?label=mp4_ld&template=480x360"
+        page_info = {"type": "video", "media_info": {"stream_url": ld}}
+        post = _make_crawl_post(pic_infos={}, pic_ids=[], page_info=page_info)
+
+        media = extract_media(post)
+
+        videos = [item for item in media if item.type is MediaType.VIDEO]
+        self.assertEqual(len(videos), 1)
+        self.assertEqual(videos[0].url, ld)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class UpgradedVideoDedupTests(unittest.TestCase):
+    def test_upgraded_video_url_dedupes_page_info_stream(self):
+        """video_url 升级到高清流后与 page_info 流地址相同 → 只保留 1 条 VIDEO。"""
+        hd = "https://f.video.weibocdn.com/o0/abc.mp4?label=mp4_hd"
+        page_info = {
+            "type": "video",
+            "page_pic": {"url": "https://wx1.sinaimg.cn/large/cover.jpg"},
+            "media_info": {"mp4_h265_url": hd, "duration": 5},
+        }
+        post = _make_crawl_post(
+            pic_infos={}, pic_ids=[],
+            video_url="https://f.video.weibocdn.com/o0/abc.mp4?label=mp4_sd",
+            page_info=page_info,
+        )
+        media = extract_media(post)
+        videos = [item for item in media if item.type == MediaType.VIDEO]
+        assert len(videos) == 1
+        assert videos[0].url == hd

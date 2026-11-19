@@ -3,7 +3,7 @@
 覆盖：
 - 窗口参数：调 webview.create_window，url=m.weibo.cn，宽 480
 - dev 降级：webview.create_window 抛异常 → 返 ok=false
-- 工具条渲染：index 页面有 btn-browser 按钮
+- 工具条渲染：index 页面不再渲染 btn-browser 占位按钮（2026-09-10 用户确认移除前端入口，后端接口封存）
 """
 import sys
 import unittest
@@ -57,12 +57,12 @@ class BrowserButtonRenderTests(unittest.TestCase):
     def setUpClass(cls):
         cls.client = TestClient(app)
 
-    def test_browser_button_in_index(self):
-        """index 页面有 btn-browser 按钮 + 🌐 图标。"""
+    def test_browser_placeholder_button_removed_from_index(self):
+        """index 页面不再有 btn-browser 占位按钮与 🌐 图标。"""
         r = self.client.get("/")
         self.assertEqual(r.status_code, 200)
-        self.assertIn("btn-browser", r.text, "工具条按钮未渲染")
-        self.assertIn("🌐", r.text, "🌐 图标未渲染")
+        self.assertNotIn('id="btn-browser"', r.text, "btn-browser 占位按钮仍在渲染")
+        self.assertNotIn("🌐", r.text, "🌐 图标仍在渲染")
 
 
 if __name__ == "__main__":

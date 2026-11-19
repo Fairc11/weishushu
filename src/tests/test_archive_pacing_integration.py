@@ -81,7 +81,8 @@ def test_archive_source_routes_profile_detail_and_comments_through_scheduler():
     with patch("weibo_book.archive.source.fetch_post_comments_strict", return_value=[]):
         source.fetch_recent_comments("MID1")
 
-    assert scheduler.calls == ["profile", "detail", "comments"]
+    # 空页后的确认请求同样经过限速调度
+    assert scheduler.calls == ["profile", "profile", "detail", "comments"]
 
 
 def test_low_intensity_media_count_comes_from_actual_unique_download_tasks(tmp_path):

@@ -68,6 +68,7 @@ def _media_progress(total: int):
 WEIBO_MEDIA_HOST_ROOTS = (
     "weibo.com",
     "weibo.cn",
+    "weibocdn.com",
     "sina.com.cn",
     "sina.cn",
     "sinaimg.cn",
@@ -218,7 +219,7 @@ def download_file(
             temp_path = None
             _fsync_directory(dest.parent)
             return True
-        except OperationCancelled:
+        except (OperationCancelled, OperationPaused):
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
             raise
@@ -460,7 +461,7 @@ def _download_file_at(
             temp_created = False
             os.fsync(directory_fd)
             return final_name
-        except OperationCancelled:
+        except (OperationCancelled, OperationPaused):
             if temp_created:
                 os.unlink(temp_name, dir_fd=directory_fd)
             raise
@@ -579,7 +580,7 @@ def _download_file_in_checked_directory(
             temp_path = None
             _fsync_directory(target_directory)
             return final_name
-        except OperationCancelled:
+        except (OperationCancelled, OperationPaused):
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
             raise

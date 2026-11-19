@@ -140,7 +140,7 @@ def record(bid: str, *, text: str = "旧正文", visibility: str = "visible") ->
 
 
 def database_hash(root: Path) -> str:
-    return hashlib.sha256((root / "data" / "archive.db").read_bytes()).hexdigest()
+    return hashlib.sha256((root / "数据与媒体" / "数据" / "archive.db").read_bytes()).hexdigest()
 
 
 def test_legacy_index_is_not_converted_and_is_cleaned_after_next_success(tmp_path):
@@ -217,7 +217,8 @@ def test_sync_emits_monotonic_real_progress_totals(tmp_path):
     )
     assert planned["current"] == 0
     for phase in ("extract", "comments", "media"):
-        phase_events = [event for event in events if event["phase"] == phase]
+        phase_events = [event for event in events if event["phase"] == phase
+                        and event["unit"] == "post" and event["subphase"] == phase]
         assert [event["current"] for event in phase_events] == [1, 2]
         assert all(event["total"] == 2 for event in phase_events)
     generate_events = [event for event in events if event["phase"] == "generate"]
@@ -484,7 +485,7 @@ def test_rebuild_failure_keeps_database_hash_and_mtime_then_success_replaces(tmp
 
     root = tmp_path / "archive"
     seed_archive(root, record("old"))
-    db = root / "data" / "archive.db"
+    db = root / "数据与媒体" / "数据" / "archive.db"
     before = (database_hash(root), db.stat().st_mtime_ns)
     source = FakeSource([page("new")], {"new": post("new")})
     source.failures["new"] = WeiboError("断网", kind=WeiboErrorKind.NETWORK)
@@ -816,7 +817,7 @@ class FakeMediaStager:
             StagedMedia(
                 MediaRecord(
                     "post", post_value.bid, "image", 0,
-                    "https://example.test/image.jpg", f"media/{post_value.bid}.jpg"
+                    "https://example.test/image.jpg", f"媒体/微博图片/{post_value.bid}.jpg"
                 ),
                 staged,
             )
@@ -891,13 +892,13 @@ def test_media_is_promoted_only_with_committed_database_and_failure_rolls_back(t
     assert repo.get_post("A") is None
     assert repo._connection.execute("SELECT COUNT(*) FROM media").fetchone()[0] == 0
     repo.close()
-    assert not (root / "media" / "A.jpg").exists()
+    assert not (root / "数据与媒体" / "媒体" / "微博图片" / "A.jpg").exists()
 
     monkeypatch.undo()
     PersonalArchiveSync(
         root, source, IdentityProvider(), media_stager=FakeMediaStager()
     ).run("incremental")
-    assert (root / "media" / "A.jpg").read_bytes() == b"A"
+    assert (root / "数据与媒体" / "媒体" / "微博图片" / "A.jpg").read_bytes() == b"A"
 
 
 def test_rebuild_refuses_symlink_target(tmp_path):
@@ -939,7 +940,7 @@ def test_media_destination_symlink_is_rejected_without_external_write(tmp_path):
     seed_archive(root)
     external = tmp_path / "external-media"
     external.mkdir()
-    (root / "media").symlink_to(external, target_is_directory=True)
+    (root / "数据与媒体" / "媒体").symlink_to(external, target_is_directory=True)
 
     with pytest.raises(WeiboError, match="媒体.*符号链接"):
         PersonalArchiveSync(
@@ -972,7 +973,7 @@ def test_staged_media_hardlink_is_rejected_without_touching_external_file(tmp_pa
                 StagedMedia(
                     MediaRecord(
                         "post", "A", "image", 0,
-                        "https://example.test/a.jpg", "media/A.jpg"
+                        "https://example.test/a.jpg", "媒体/微博图片/A.jpg"
                     ),
                     staged,
                 )
@@ -987,7 +988,7 @@ def test_staged_media_hardlink_is_rejected_without_touching_external_file(tmp_pa
         ).run("incremental")
     assert external.read_bytes() == b"external"
     assert external.stat().st_nlink == 1
-    assert not (root / "media" / "A.jpg").exists()
+    assert not (root / "数据与媒体" / "媒体" / "微博图片" / "A.jpg").exists()
 
 
 @pytest.mark.parametrize(
@@ -999,7 +1000,7 @@ def test_media_target_cannot_address_archive_control_files(tmp_path, target):
 
     root = tmp_path / "archive"
     seed_archive(root)
-    before_manifest = (root / "manifest.json").read_bytes()
+    before_manifest = (root / "数据与媒体" / "数据" / "manifest.json").read_bytes()
 
     class ControlTargetStager:
         def stage(self, post_value, comments, work_root, cancel_requested=None):
@@ -1012,14 +1013,14 @@ def test_media_target_cannot_address_archive_control_files(tmp_path, target):
                 )
             ]
 
-    with pytest.raises(WeiboError, match="media"):
+    with pytest.raises(WeiboError, match="媒体目标"):
         PersonalArchiveSync(
             root,
             FakeSource([page("A")], {"A": post("A")}),
             IdentityProvider(),
             media_stager=ControlTargetStager(),
     ).run("incremental")
-    assert (root / "manifest.json").read_bytes() == before_manifest
+    assert (root / "数据与媒体" / "数据" / "manifest.json").read_bytes() == before_manifest
     repository = ArchiveRepository.open(root, "10001")
     try:
         assert repository.get_post("A") is None
@@ -1038,8 +1039,8 @@ def test_media_promotion_aborts_when_target_changes_after_prepare(
 
     root = tmp_path / "archive"
     seed_archive(root)
-    media = root / "media"
-    media.mkdir()
+    media = root / "数据与媒体" / "媒体" / "微博图片"
+    media.mkdir(parents=True)
     target = media / "A.jpg"
     if concurrent_change != "new_file":
         target.write_bytes(b"old")
@@ -1085,8 +1086,8 @@ def test_present_target_swap_inside_atomic_capture_preserves_concurrent_bytes(
 
     root = tmp_path / "archive"
     seed_archive(root)
-    media = root / "media"
-    media.mkdir()
+    media = root / "数据与媒体" / "媒体" / "微博图片"
+    media.mkdir(parents=True)
     target = media / "A.jpg"
     target.write_bytes(b"old")
     original_rename = sync_module.os.rename
@@ -1135,8 +1136,8 @@ def test_missing_target_creation_inside_atomic_install_is_never_overwritten(
 
     root = tmp_path / "archive"
     seed_archive(root)
-    media = root / "media"
-    media.mkdir()
+    media = root / "数据与媒体" / "媒体" / "微博图片"
+    media.mkdir(parents=True)
     target = media / "A.jpg"
     original_link = sync_module.os.link
     original_open = sync_module.os.open
@@ -1223,7 +1224,7 @@ def test_promotion_recovery_rejects_unbound_or_duplicate_journal_paths(
     entries = [
         {
             "staged": f".work/{run_id}/safe-1",
-            "target": "media/a.jpg",
+            "target": "媒体/微博图片/a.jpg",
             "backup": f".work/{run_id}/backup-1",
             "expected_target": {"state": "missing"},
             "installed_target": None,
@@ -1240,7 +1241,7 @@ def test_promotion_recovery_rejects_unbound_or_duplicate_journal_paths(
         entries.append(
             {
                 "staged": f".work/{run_id}/safe-2",
-                "target": "media/a.jpg",
+                "target": "媒体/微博图片/a.jpg",
                 "backup": f".work/{run_id}/backup-2",
                 "expected_target": {"state": "missing"},
                 "installed_target": None,
@@ -1270,14 +1271,14 @@ def test_promotion_recovery_rejects_unbound_or_duplicate_journal_paths(
     )
     repo.finish_sync(run_id, "error", {})
     repo.close()
-    before_manifest = (root / "manifest.json").read_bytes()
+    before_manifest = (root / "数据与媒体" / "数据" / "manifest.json").read_bytes()
     before_database = database_hash(root)
 
     with pytest.raises(WeiboError, match="日志.*(?:路径|内容证明)|目标.*重复"):
         PersonalArchiveSync(
             root, FakeSource([], {}), IdentityProvider()
         ).run("incremental")
-    assert (root / "manifest.json").read_bytes() == before_manifest
+    assert (root / "数据与媒体" / "数据" / "manifest.json").read_bytes() == before_manifest
     assert database_hash(root) == before_database
     ArchiveRepository.open(root, "10001").close()
 
@@ -1287,8 +1288,8 @@ def test_promotion_recovery_keeps_backup_when_third_party_recreates_target(tmp_p
 
     root = tmp_path / "archive"
     seed_archive(root)
-    (root / "media").mkdir()
-    target = root / "media" / "A.jpg"
+    (root / "数据与媒体" / "媒体" / "微博图片").mkdir(parents=True)
+    target = root / "数据与媒体" / "媒体" / "微博图片" / "A.jpg"
     target.write_bytes(b"original")
     marker = target.lstat()
     expected = PersonalArchiveSync._target_state(marker)
@@ -1304,7 +1305,7 @@ def test_promotion_recovery_keeps_backup_when_third_party_recreates_target(tmp_p
         "phase": "prepared",
         "entries": [{
             "staged": f".work/{run_id}/promotion-safe-0",
-            "target": "media/A.jpg",
+            "target": "媒体/微博图片/A.jpg",
             "backup": f".work/{run_id}/promotion-backup-0",
             "expected_target": expected,
             "installed_target": None,
@@ -1345,8 +1346,8 @@ def test_promotion_journal_recovers_each_failed_phase(
 
     root = tmp_path / "archive"
     seed_archive(root)
-    (root / "media").mkdir()
-    target = root / "media" / "A.jpg"
+    (root / "数据与媒体" / "媒体" / "微博图片").mkdir(parents=True)
+    target = root / "数据与媒体" / "媒体" / "微博图片" / "A.jpg"
     target.write_bytes(b"old")
     source = FakeSource([page("A")], {"A": post("A")})
     monkeypatch.setattr(
@@ -1442,7 +1443,7 @@ def test_staged_path_swap_after_open_copies_verified_inode(
             IdentityProvider(),
             media_stager=SwapStager(),
         ).run("incremental")
-        assert (root / "media" / "A.jpg").read_bytes() == b"A"
+        assert (root / "数据与媒体" / "媒体" / "微博图片" / "A.jpg").read_bytes() == b"A"
     else:
         with pytest.raises(WeiboError, match="媒体暂存文件在打开时已变化"):
             PersonalArchiveSync(
@@ -1451,7 +1452,7 @@ def test_staged_path_swap_after_open_copies_verified_inode(
                 IdentityProvider(),
                 media_stager=SwapStager(),
             ).run("incremental")
-        assert not (root / "media" / "A.jpg").exists()
+        assert not (root / "数据与媒体" / "媒体" / "微博图片" / "A.jpg").exists()
 
     assert state["swapped"] is True
     assert external.read_bytes() == b"outside"
@@ -1468,8 +1469,8 @@ def test_process_crash_during_media_install_is_recovered_on_next_run(
 
     root = tmp_path / "archive"
     seed_archive(root)
-    (root / "media").mkdir()
-    target = root / "media" / "A.jpg"
+    (root / "数据与媒体" / "媒体" / "微博图片").mkdir(parents=True)
+    target = root / "数据与媒体" / "媒体" / "微博图片" / "A.jpg"
     target.write_bytes(b"old")
     code = r'''
 import os
@@ -1496,7 +1497,7 @@ class Stager:
     def stage(self, post, comments, work_root, cancel_requested=None):
         staged = work_root / "A.jpg"
         staged.write_bytes(b"A")
-        return [StagedMedia(MediaRecord("post", "A", "image", 0, "u", "media/A.jpg"), staged)]
+        return [StagedMedia(MediaRecord("post", "A", "image", 0, "u", "媒体/微博图片/A.jpg"), staged)]
 window = os.environ["CRASH_WINDOW"]
 if window == "after_install":
     original_install = PersonalArchiveSync._install_staged_without_overwrite
@@ -2057,4 +2058,48 @@ def test_sync_promotes_staged_media_without_directory_descriptors(tmp_path, monk
     ).run("incremental")
 
     assert result.new_posts == 1
-    assert (root / "media" / "A.jpg").read_bytes() == b"A"
+    assert (root / "数据与媒体" / "媒体" / "微博图片" / "A.jpg").read_bytes() == b"A"
+
+
+class EmptyCommentSource(FakeSource):
+    def fetch_recent_comments(self, post_id: str, limit: int = 10) -> list[Comment]:
+        self.comment_fetches.append((post_id, limit))
+        return []
+
+
+def _comment_texts(root: Path, bid: str) -> list[str]:
+    repo = ArchiveRepository.open(root, "10001")
+    try:
+        rows = repo._connection.execute(
+            "SELECT payload_json FROM comments WHERE post_bid = ?", (bid,)
+        ).fetchall()
+    finally:
+        repo.close()
+    return [json.loads(row[0])["text"] for row in rows]
+
+
+def test_empty_comment_result_keeps_existing_comment_snapshot(tmp_path):
+    """评论接口业务失败时返回空列表；不能据此清空档案里已有的评论。"""
+    from weibo_book.archive.sync import PersonalArchiveSync
+
+    root = tmp_path / "archive"
+    seed_archive(root, record("A"))
+    source = EmptyCommentSource([page("A")], {"A": post("A", text="新正文")})
+
+    result = PersonalArchiveSync(root, source, IdentityProvider()).run("incremental")
+
+    assert result.refreshed_posts == 1
+    assert source.comment_fetches == [("A", 10)]
+    assert _comment_texts(root, "A") == ["旧评论"]
+
+
+def test_non_empty_comment_result_still_replaces_snapshot(tmp_path):
+    from weibo_book.archive.sync import PersonalArchiveSync
+
+    root = tmp_path / "archive"
+    seed_archive(root, record("A"))
+    source = FakeSource([page("A")], {"A": post("A", text="新正文")})
+
+    PersonalArchiveSync(root, source, IdentityProvider()).run("incremental")
+
+    assert _comment_texts(root, "A") == ["评论正文"]

@@ -21,6 +21,10 @@ from pydantic import BaseModel
 from backend.app.schemas import (
     ArchiveFolderInspection,
     ArchiveInspectRequest,
+    ArchivePreviewRequest,
+    ArchivePreviewStartResponse,
+    ArchiveSettingsResponse,
+    ArchiveSettingsUpdateRequest,
     BackupIndex,
     FollowingArchiveRequest,
     FollowingArchiveStartResponse,
@@ -29,8 +33,13 @@ from backend.app.schemas import (
     PersonalArchiveRequest,
     PersonalArchiveStartResponse,
     WhoamiResponse,
+    ArchiveLibraryEntry,
+    ArchiveLibraryResponse,
+    VideoQualityCheckResponse,
+    VideoQualityCheckRequest,
 )
 from backend.app.services.archive_folder import (
+    find_child_archives,
     inspect_archive_folder,
     inspect_selected_folder,
     resolve_archive_dir,
@@ -125,6 +134,8 @@ def render_personal_archive(
     cancel_requested,
     begin_commit=None,
     pause_requested=None,
+    progress_callback=None,
+    timings=None,
 ) -> list[str]:
     """从已提交的归档数据生成固定成品，并返回相对于归档根目录的路径。"""
     root = _physical_root(Path(output_dir))
@@ -135,18 +146,20 @@ def render_personal_archive(
             raise OperationCancelled("任务已取消")
         repository = ArchiveRepository.open(root, uid)
         try:
+            formats = repository.read_output_formats()
             rendered = ArchiveRenderer(repository).render_all(
                 root,
                 cancel_requested=cancel_requested,
                 pause_requested=pause_requested,
                 begin_commit=begin_commit,
+                include_pdf=formats["pdf"],
+                include_markdown=formats["markdown"],
+                progress_callback=progress_callback,
+                timings=timings,
             )
         finally:
             repository.close()
-    return [
-        rendered[key].relative_to(root).as_posix()
-        for key in ("html", "pdf", "markdown", "data")
-    ]
+    return [path.relative_to(root).as_posix() for path in rendered.values()]
 
 
 def _http_identity() -> dict[str, Any]:
@@ -173,15 +186,19 @@ def _http_identity() -> dict[str, Any]:
 _UID_PATTERN = re.compile(r"^\d{5,20}$")
 
 
-def _resolve_target_identity(req_target_uid: str | None) -> dict[str, str] | None:
+def _resolve_target_identity(req_target_uid: str | None, *, require_verified: bool = False) -> dict[str, str] | None:
     """``target_uid`` 提供时返回目标博主身份；等于登录账号或缺省时返回 None（本人模式）。"""
     if req_target_uid is None:
+        if require_verified:
+            raise HTTPException(status_code=400, detail="请先选择带认证 V 标识的博主")
         return None
     target_uid = req_target_uid.strip()
     if not _UID_PATTERN.fullmatch(target_uid):
         raise HTTPException(status_code=400, detail="目标博主 UID 无效")
     login_uid = _http_identity()["uid"]
     if target_uid == login_uid:
+        if require_verified:
+            raise HTTPException(status_code=400, detail="此超话补漏入口用于备份其他认证博主")
         return None
     book = WeiboBook()
     cookie_str = book.ensure_login(force=False)
@@ -193,6 +210,8 @@ def _resolve_target_identity(req_target_uid: str | None) -> dict[str, str] | Non
     except WeiboError as exc:
         status = 404 if exc.kind == WeiboErrorKind.NOT_FOUND else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc
+    if require_verified and info.verified is not True:
+        raise HTTPException(status_code=400, detail="超话补漏仅适用于带认证 V 标识的博主")
     if not info.uid or not info.screen_name:
         raise HTTPException(status_code=400, detail="目标博主信息无效")
     return {"uid": str(info.uid), "screen_name": info.screen_name, "login_uid": login_uid}
@@ -201,9 +220,15 @@ def _resolve_target_identity(req_target_uid: str | None) -> dict[str, str] | Non
 class _ProgressReporter:
     """从同步工作线程向 TaskManager 发送结构化进度。"""
 
-    def __init__(self, task_id: str, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self,
+        task_id: str,
+        loop: asyncio.AbstractEventLoop,
+        file_total: int = 4,
+    ) -> None:
         self.task_id = task_id
         self.loop = loop
+        self.file_total = file_total
         self.started_at = time.monotonic()
         self._pending: list[Any] = []
         self._last_pct = 0.0
@@ -214,9 +239,9 @@ class _ProgressReporter:
             normalized.update({
                 "phase": "generate",
                 "pct": 0.96,
-                "detail": "归档数据已完成，正在生成三种格式与离线数据",
+                "detail": "归档数据已完成，正在生成固定文件与离线数据",
                 "current": 0,
-                "total": 4,
+                "total": self.file_total,
                 "unit": "file",
             })
         self._queue(normalized)
@@ -226,8 +251,8 @@ class _ProgressReporter:
             "phase": "complete",
             "pct": 1.0,
             "detail": "微博书归档与固定文件已完成",
-            "current": 4,
-            "total": 4,
+            "current": self.file_total,
+            "total": self.file_total,
             "unit": "file",
         })
 
@@ -304,8 +329,10 @@ def _ensure_mode_allowed(mode: str, inspection: ArchiveFolderInspection) -> None
         raise HTTPException(status_code=409, detail="旧版索引目录需要首次建立完整档案")
     if mode == "create" and inspection.state not in {"empty", "legacy_index"}:
         raise HTTPException(status_code=409, detail="首次建立微博书只能使用空目录")
-    if mode in {"incremental", "rebuild"} and inspection.state != "archive":
-        raise HTTPException(status_code=409, detail="增量同步或重建必须使用现有微博书目录")
+    if mode in {"incremental", "rebuild", "backfill"} and inspection.state != "archive":
+        raise HTTPException(status_code=409, detail="增量同步、重建或历史回填必须使用现有微博书目录")
+    if mode == "backfill" and inspection.history_complete:
+        raise HTTPException(status_code=409, detail="该微博书历史已补全，无需回填")
 
 
 @router.get("/api/login/whoami", response_model=WhoamiResponse)
@@ -350,7 +377,10 @@ async def api_backup_inspect(req: ArchiveInspectRequest) -> ArchiveFolderInspect
 
 @router.post("/api/backup/start", response_model=PersonalArchiveStartResponse)
 async def api_backup_start(req: PersonalArchiveRequest) -> PersonalArchiveStartResponse:
-    target = await asyncio.to_thread(_resolve_target_identity, req.target_uid)
+    if req.include_supertopics:
+        target = await asyncio.to_thread(_resolve_target_identity, req.target_uid, require_verified=True)
+    else:
+        target = await asyncio.to_thread(_resolve_target_identity, req.target_uid)
     identity = target if target is not None else _http_identity()
     try:
         effective_dir = await asyncio.to_thread(
@@ -404,6 +434,152 @@ async def api_backup_start(req: PersonalArchiveRequest) -> PersonalArchiveStartR
     )
 
 
+async def _inspect_existing_archive(
+    output_dir: str,
+    target_uid: str | None,
+) -> ArchiveFolderInspection:
+    """解析目标身份并只读检查目录；非现有微博书目录返回 409。"""
+    target = await asyncio.to_thread(_resolve_target_identity, target_uid)
+    uid = target["uid"] if target is not None else _http_identity()["uid"]
+    inspection = await asyncio.to_thread(
+        inspect_archive_folder, output_dir, current_uid=uid
+    )
+    if inspection.state == "uid_mismatch":
+        raise HTTPException(status_code=409, detail="该微博书属于其他账号，不允许访问")
+    if inspection.state != "archive":
+        raise HTTPException(status_code=409, detail="所选目录不是现有微博书目录")
+    return inspection
+
+
+def _archive_settings_from_inspection(
+    inspection: ArchiveFolderInspection,
+) -> ArchiveSettingsResponse:
+    formats = inspection.output_formats
+    return ArchiveSettingsResponse(
+        state=inspection.state,
+        output_formats={
+            "pdf": bool(formats.get("pdf", True)),
+            "markdown": bool(formats.get("markdown", True)),
+        },
+        history_complete=inspection.history_complete,
+        history_cutoff=inspection.history_cutoff,
+    )
+
+
+@router.get("/api/backup/settings", response_model=ArchiveSettingsResponse)
+async def api_backup_settings_get(
+    output_dir: str = Query(..., description="微博书目录绝对路径"),
+    target_uid: Optional[str] = Query(None, description="目标博主 UID，缺省为本人"),
+) -> ArchiveSettingsResponse:
+    target = await asyncio.to_thread(_resolve_target_identity, target_uid)
+    uid = target["uid"] if target is not None else _http_identity()["uid"]
+    inspection = await asyncio.to_thread(
+        inspect_archive_folder, output_dir, current_uid=uid
+    )
+    return _archive_settings_from_inspection(inspection)
+
+
+@router.post("/api/backup/settings", response_model=ArchiveSettingsResponse)
+async def api_backup_settings_save(
+    req: ArchiveSettingsUpdateRequest,
+) -> ArchiveSettingsResponse:
+    inspection = await _inspect_existing_archive(req.output_dir, req.target_uid)
+    root = _physical_root(Path(req.output_dir))
+    try:
+        with _archive_lock(root):
+            repository = ArchiveRepository.open(root, inspection.uid)
+            try:
+                repository.write_output_formats(
+                    pdf=req.output_formats.pdf,
+                    markdown=req.output_formats.markdown,
+                )
+            finally:
+                repository.close()
+    except WeiboError as exc:
+        status = 401 if exc.kind == WeiboErrorKind.AUTH else 409
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    updated = await asyncio.to_thread(
+        inspect_archive_folder, req.output_dir, current_uid=inspection.uid
+    )
+    return _archive_settings_from_inspection(updated)
+
+
+def _render_preview(output_dir: str, uid: str, progress_callback=None) -> dict[str, object]:
+    """锁内只生成互动 HTML 与离线数据，供「更新 HTML」后台任务调用。"""
+    root = _physical_root(Path(output_dir))
+    try:
+        with _archive_lock(root):
+            repository = ArchiveRepository.open(root, uid)
+            try:
+                rendered = ArchiveRenderer(repository).render_all(
+                    root,
+                    cancel_requested=lambda: False,
+                    pause_requested=lambda: False,
+                    include_pdf=False,
+                    include_markdown=False,
+                    progress_callback=progress_callback,
+                )
+            finally:
+                repository.close()
+    except WeiboError:
+        raise
+    except Exception as exc:
+        raise WeiboError("更新 HTML 失败", original=exc) from exc
+    return {
+        "generated_files": [
+            path.relative_to(root).as_posix() for path in rendered.values()
+        ],
+        "output_dir": str(root),
+    }
+
+
+@router.post("/api/backup/preview", response_model=ArchivePreviewStartResponse)
+async def api_backup_preview(req: ArchivePreviewRequest) -> ArchivePreviewStartResponse:
+    inspection = await _inspect_existing_archive(req.output_dir, req.target_uid)
+    task_id = await task_manager.create()
+    started_at = time.monotonic()
+
+    async def _emit(event: dict) -> None:
+        normalized = dict(event)
+        normalized["elapsed_seconds"] = time.monotonic() - started_at
+        await task_manager.update_progress_event(task_id, normalized)
+
+    async def _run() -> dict[str, object]:
+        await _emit({
+            "phase": "generate",
+            "pct": 0.5,
+            "detail": "正在更新互动 HTML",
+            "current": 0,
+            "total": 2,
+            "unit": "file",
+        })
+        loop = asyncio.get_running_loop()
+        def preview_progress(event):
+            future = asyncio.run_coroutine_threadsafe(_emit(event), loop)
+            future.result()
+        try:
+            result = await asyncio.to_thread(
+                _render_preview, req.output_dir, inspection.uid, preview_progress
+            )
+        except WeiboError:
+            raise
+        except Exception as exc:
+            raise WeiboError("更新 HTML 失败", original=exc) from exc
+        generated = result["generated_files"]
+        await _emit({
+            "phase": "complete",
+            "pct": 1.0,
+            "detail": "HTML 已更新",
+            "current": len(generated),
+            "total": len(generated),
+            "unit": "file",
+        })
+        return result
+
+    asyncio.create_task(run_in_background(task_id, _run, manager=task_manager))
+    return ArchivePreviewStartResponse(task_id=task_id)
+
+
 @router.post("/api/following/start", response_model=FollowingArchiveStartResponse)
 async def api_following_start(
     req: FollowingArchiveRequest,
@@ -453,3 +629,106 @@ async def api_following_duration_check(
         status = 404 if exc.kind == WeiboErrorKind.NOT_FOUND else 409
         raise HTTPException(status_code=status, detail=str(exc)) from exc
     return FollowingDurationCheckResponse(**asdict(result))
+
+
+@router.post("/api/backup/archives", response_model=ArchiveLibraryResponse)
+async def api_backup_archives(req: ArchiveInspectRequest) -> ArchiveLibraryResponse:
+    """只读列出所选目录下的微博书档案（不限 UID），供微博书库面板展示。"""
+
+    def _list() -> list[ArchiveFolderInspection]:
+        direct = inspect_archive_folder(req.output_dir, current_uid=None)
+        if direct.state == "archive":
+            return [direct]
+        return find_child_archives(req.output_dir, None, inspector=inspect_archive_folder)
+
+    found = await asyncio.to_thread(_list)
+    entries = [
+        ArchiveLibraryEntry(
+            path=item.path,
+            uid=item.uid,
+            screen_name=item.screen_name,
+            total_posts=item.total_posts,
+            last_successful_sync_at=item.last_successful_sync_at,
+            history_complete=item.history_complete,
+            history_cutoff=item.history_cutoff,
+            book_format_version=item.book_format_version,
+        )
+        for item in found
+    ]
+    entries.sort(key=lambda item: item.last_successful_sync_at, reverse=True)
+    return ArchiveLibraryResponse(entries=entries)
+
+
+@router.post("/api/backup/video-quality/check", response_model=VideoQualityCheckResponse)
+async def api_video_quality_check(req: VideoQualityCheckRequest) -> VideoQualityCheckResponse:
+    from backend.app.services.video_quality_checks import start_check
+    target = await asyncio.to_thread(_resolve_target_identity, req.target_uid)
+    identity = target if target is not None else _http_identity()
+    inspection = await asyncio.to_thread(inspect_archive_folder, req.output_dir, current_uid=identity["uid"])
+    _ensure_mode_allowed("incremental", inspection)
+    try:
+        result = await start_check(
+            req.output_dir, identity["uid"], identity.get("login_uid", identity["uid"]),
+            manager=task_manager, dependency_builder=build_personal_archive_dependencies,
+            pacing_mode=req.pacing_mode,
+        )
+    except WeiboError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return VideoQualityCheckResponse(**result)
+
+
+@router.get("/api/backup/library", response_model=ArchiveLibraryResponse)
+async def api_library_list() -> ArchiveLibraryResponse:
+    from backend.app.services.archive_library import list_archives
+    try:
+        return ArchiveLibraryResponse(entries=await asyncio.to_thread(list_archives))
+    except WeiboError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+from backend.app.schemas import ArchiveLibraryRegistration, ArchiveLibraryMutation, ArchiveSizeResponse, ArchiveSizeRow
+
+
+@router.get("/api/backup/library/sizes", response_model=ArchiveSizeResponse)
+async def api_library_sizes(path: str | None = None) -> ArchiveSizeResponse:
+    from backend.app.services.archive_library import archive_size_bytes, registered_archive_sizes
+    try:
+        if path is not None:
+            size = await asyncio.to_thread(archive_size_bytes, path)
+            return ArchiveSizeResponse(sizes=[ArchiveSizeRow(path=path, size_bytes=size)])
+        rows = await asyncio.to_thread(registered_archive_sizes)
+    except WeiboError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ArchiveSizeResponse(sizes=[ArchiveSizeRow(**row) for row in rows])
+
+
+@router.post("/api/backup/library/register", response_model=ArchiveLibraryResponse)
+async def api_library_register(req: ArchiveLibraryRegistration) -> ArchiveLibraryResponse:
+    from backend.app.services.archive_library import register_archive
+    try:
+        await asyncio.to_thread(register_archive, req.output_dir, req.uid)
+    except WeiboError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await api_library_list()
+
+
+@router.post("/api/backup/library/relocate", response_model=ArchiveLibraryResponse)
+async def api_library_relocate(req: ArchiveLibraryMutation) -> ArchiveLibraryResponse:
+    from backend.app.services.archive_library import relocate_archive
+    if not req.output_dir:
+        raise HTTPException(status_code=400, detail="请选择微博书的新目录")
+    try:
+        await asyncio.to_thread(relocate_archive, req.path, req.uid, req.output_dir)
+    except WeiboError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await api_library_list()
+
+
+@router.post("/api/backup/library/remove", response_model=ArchiveLibraryResponse)
+async def api_library_remove(req: ArchiveLibraryMutation) -> ArchiveLibraryResponse:
+    from backend.app.services.archive_library import remove_archive
+    try:
+        await asyncio.to_thread(remove_archive, req.path, req.uid)
+    except WeiboError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await api_library_list()

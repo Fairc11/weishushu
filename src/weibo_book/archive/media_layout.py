@@ -8,22 +8,36 @@ import logging
 import os
 import re
 import sqlite3
+import stat
 from datetime import datetime
 from pathlib import Path
 
 from weibo_book.errors import WeiboError, WeiboErrorKind
+
+from .paths import (
+    MEDIA_ROOT_NAME,
+    ArchivePaths,
+    find_child_nfc,
+    normalize_nfc,
+)
 
 logger = logging.getLogger(__name__)
 
 MEDIA_LAYOUT_VERSION_KEY = "media_layout_version"
 # 2 = media 表与文件迁入年-月目录；3 = 同步改写 posts/revisions/comments
 # 内嵌 JSON 里的旧平铺媒体路径（媒体表迁移时漏改，会导致 PDF 本地图片加载失败）
-MEDIA_LAYOUT_VERSION = 3
+# 4 = 根布局 v2：媒体子目录改中文名（posts→微博图片、comments→评论图片、
+# avatars→头像、covers→封面），media.local_path 与内嵌 JSON 前缀改写为
+# 媒体/…（相对 数据与媒体/ 目录）
+MEDIA_LAYOUT_VERSION = 4
 
 _YEAR = re.compile(r"\d{4}")
 _MONTH = re.compile(r"0[1-9]|1[0-2]")
 _CREATED_AT_YEAR_MONTH = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])")
 _LEGACY_EMBEDDED_REF = re.compile(r"media/(?:posts|comments)/(?!\d{4}/)[^\"\\/]+")
+_V4_EMBEDDED_REF = re.compile(
+    r"media/(?:posts|comments|avatars|covers)/[^\"\\/]+(?:/[^\"\\/]+)*"
+)
 # 存有媒体相对路径的内嵌 JSON 列：(表名, 主键列, JSON 列)
 _EMBEDDED_JSON_COLUMNS = (
     ("posts", "bid", "retweeted_json"),
@@ -32,6 +46,19 @@ _EMBEDDED_JSON_COLUMNS = (
     ("post_revisions", "id", "payload_json"),
     ("comments", "id", "payload_json"),
 )
+
+# 媒体子目录改名映射（v3→v4）：旧英文名 → 新中文名（NFC）
+MEDIA_SUBDIR_RENAMES = {
+    "posts": normalize_nfc("微博图片"),
+    "comments": normalize_nfc("评论图片"),
+    "avatars": normalize_nfc("头像"),
+    "covers": normalize_nfc("封面"),
+}
+_NEW_MEDIA_SUBDIRS = frozenset(MEDIA_SUBDIR_RENAMES.values())
+_V4_PREFIX_REWRITES = {
+    f"media/{old}/": f"{MEDIA_ROOT_NAME}/{new}/"
+    for old, new in MEDIA_SUBDIR_RENAMES.items()
+}
 
 
 def media_year_month(created_at: object) -> tuple[str, str] | None:
@@ -46,22 +73,27 @@ def media_year_month(created_at: object) -> tuple[str, str] | None:
 
 
 def media_path_shape(value: object) -> tuple[str, ...] | None:
-    """校验 ``media/`` 相对路径形状，合法返回分段元组，否则返回 ``None``。
+    """校验归档媒体相对路径形状，合法返回分段元组，否则返回 ``None``。
 
-    既有校验语义不变（``media/`` 前缀、POSIX 相对路径、无空段与
-    ``.``/``..`` 段）；在此之上只允许再出现 ``{YYYY}/{MM}`` 两层目录
-    （四位年 + 两位月，正则锁死），更深的层级一律拒绝。
+    ``media/`` 前缀（布局 v1，相对归档根，迁移输入用）保持既有校验语义
+    不变：POSIX 相对路径、无空段与 ``.``/``..`` 段，允许平铺两段与
+    ``{YYYY}/{MM}`` 两层目录。``媒体/`` 前缀（布局 v2，相对
+    ``数据与媒体/`` 目录）在第一层强制中文子目录白名单
+    （微博图片|评论图片|头像|封面，NFC 比较），其余规则相同；更深的
+    层级一律拒绝。
     """
     if not isinstance(value, str) or not value or "\\" in value:
         return None
     if Path(value).is_absolute():
         return None
     parts = tuple(value.split("/"))
-    if (
-        len(parts) < 2
-        or parts[0] != "media"
-        or any(part in {"", ".", ".."} for part in parts)
-    ):
+    if len(parts) < 2 or any(part in {"", ".", ".."} for part in parts):
+        return None
+    prefix = normalize_nfc(parts[0])
+    if prefix == MEDIA_ROOT_NAME:
+        if normalize_nfc(parts[1]) not in _NEW_MEDIA_SUBDIRS:
+            return None
+    elif prefix != "media":
         return None
     extra = parts[2:-1]
     if not extra:
@@ -73,6 +105,20 @@ def media_path_shape(value: object) -> tuple[str, ...] | None:
     ):
         return parts
     return None
+
+
+def local_path_v4(value: str) -> str:
+    """把旧 ``media/<子目录>/…`` 路径改写成 ``媒体/<中文子目录>/…``。
+
+    不在改写范围内的路径原样返回。返回值的子目录名为 NFC。
+    """
+    parts = value.split("/")
+    if len(parts) < 2 or parts[0] != "media":
+        return value
+    renamed = MEDIA_SUBDIR_RENAMES.get(parts[1])
+    if renamed is None:
+        return value
+    return "/".join((MEDIA_ROOT_NAME, renamed, *parts[2:]))
 
 
 def read_media_layout_version(connection: sqlite3.Connection) -> int:
@@ -195,25 +241,33 @@ def _rewrite_embedded_media_paths(
 
 
 def migrate_media_layout(
-    root: Path, connection: sqlite3.Connection
+    paths: ArchivePaths, connection: sqlite3.Connection
 ) -> dict[str, int]:
     """旧档案媒体布局自动迁移。
 
     v1→v2：把 media 表记录的平铺文件搬到年-月目录，逐条提交、可断点恢复；
     已是新布局的记录直接跳过；源文件缺失的记录只更新路径语义（交由清理
-    收尾）。v2→v3：改写内嵌 JSON 中的旧平铺媒体路径。全部完成后才把布局
-    版本写为最新。校验和不匹配或路径不安全时中止迁移并保持旧布局可用。
+    收尾）。v2→v3：改写内嵌 JSON 中的旧平铺媒体路径。v3→v4（仅根布局
+    v2）：媒体子目录改中文名，media.local_path 与内嵌 JSON 前缀改写为
+    ``媒体/…``。全部完成后才把布局版本写为目标版本（根布局 v1 归档只
+    迁移到 3，保持旧书文件可用）。校验和不匹配或路径不安全时中止迁移
+    并保持旧布局可用。
     """
     version = read_media_layout_version(connection)
     stats = {"moved": 0, "missing": 0, "skipped": 0, "embedded_rows": 0,
-             "embedded_unresolved": 0}
-    if version >= MEDIA_LAYOUT_VERSION:
+             "embedded_unresolved": 0, "renamed_rows": 0}
+    target_version = (
+        MEDIA_LAYOUT_VERSION if paths.version >= 2 else 3
+    )
+    if version >= target_version:
         return stats
-    root = Path(root)
     if version < 2:
-        _migrate_flat_files(root, connection, stats)
-    _rewrite_embedded_media_paths(connection, stats)
-    write_media_layout_version(connection, MEDIA_LAYOUT_VERSION)
+        _migrate_flat_files(paths.media_root, connection, stats)
+    if version < 3:
+        _rewrite_embedded_media_paths(connection, stats)
+    if version < 4 and paths.version >= 2:
+        _migrate_to_v4(paths.media_root, connection, stats)
+    write_media_layout_version(connection, target_version)
     if stats["moved"] or stats["missing"]:
         logger.info(
             "归档媒体已迁移到年-月目录：移动 %d 个，源文件缺失 %d 条，保留原路径 %d 条",
@@ -224,13 +278,156 @@ def migrate_media_layout(
             "归档内嵌 JSON 媒体路径已更新：改写 %d 行，无法解析保留 %d 处",
             stats["embedded_rows"], stats["embedded_unresolved"],
         )
+    if stats["renamed_rows"]:
+        logger.info(
+            "归档媒体路径已迁移到数据与媒体布局：改写 %d 条记录",
+            stats["renamed_rows"],
+        )
     return stats
 
 
-def _migrate_flat_files(
-    root: Path, connection: sqlite3.Connection, stats: dict[str, int]
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _rename_media_subdir(media_root: Path, old: str, new: str) -> None:
+    """把 ``media_root/old`` 改名为中文 ``new``；幂等、NFC 容错。"""
+    old_dir = media_root / old
+    new_existing = find_child_nfc(media_root, new)
+    if not old_dir.exists() and not old_dir.is_symlink():
+        if new_existing is not None:
+            if new_existing.is_symlink() or not new_existing.is_dir():
+                raise WeiboError(
+                    "归档媒体目录迁移目标类型不安全，已停止迁移",
+                    kind=WeiboErrorKind.API,
+                    recoverable=False,
+                )
+            if new_existing.name != new:
+                os.replace(new_existing, media_root / new)
+                _fsync_directory(media_root)
+        return
+    marker = old_dir.lstat()
+    if stat.S_ISLNK(marker.st_mode) or not old_dir.is_dir():
+        raise WeiboError(
+            "归档媒体目录迁移源类型不安全，已停止迁移",
+            kind=WeiboErrorKind.API,
+            recoverable=False,
+        )
+    if new_existing is None:
+        os.replace(old_dir, media_root / new)
+        _fsync_directory(media_root)
+        return
+    if new_existing.is_symlink() or not new_existing.is_dir():
+        raise WeiboError(
+            "归档媒体目录迁移目标冲突，已停止迁移",
+            kind=WeiboErrorKind.API,
+            recoverable=False,
+        )
+    # 中断恢复：新旧目录都在时逐条目并入（含年-月子目录整体搬移）
+    for entry in sorted(old_dir.iterdir(), key=lambda item: item.name):
+        target = new_existing / entry.name
+        if target.exists() or target.is_symlink():
+            raise WeiboError(
+                "归档媒体目录迁移目标冲突，已停止迁移",
+                kind=WeiboErrorKind.API,
+                recoverable=False,
+            )
+        os.replace(entry, target)
+    old_dir.rmdir()
+    _fsync_directory(media_root)
+    if new_existing.name != new:
+        os.replace(media_root / new_existing.name, media_root / new)
+        _fsync_directory(media_root)
+
+
+def _rewrite_local_path_column(
+    connection: sqlite3.Connection,
+    table: str,
+    stats: dict[str, int],
 ) -> None:
-    """v1→v2：把 media 表记录的平铺文件搬到年-月目录。"""
+    """把 ``media``/``profile_assets`` 表里的旧前缀 local_path 逐行改写。"""
+    rows = connection.execute(
+        f"SELECT id, local_path FROM {table} WHERE local_path LIKE 'media/%'"
+    ).fetchall()
+    for row_id, local_path in rows:
+        updated = local_path_v4(local_path)
+        if updated == local_path:
+            continue
+        if media_path_shape(updated) is None:
+            raise WeiboError(
+                "归档媒体路径不安全，已停止迁移",
+                kind=WeiboErrorKind.API,
+                recoverable=False,
+            )
+        cursor = connection.execute(
+            f"UPDATE {table} SET local_path = ? WHERE id = ? AND local_path = ?",
+            (updated, row_id, local_path),
+        )
+        stats["renamed_rows"] += cursor.rowcount
+
+
+def _rewrite_embedded_prefixes(
+    connection: sqlite3.Connection, stats: dict[str, int]
+) -> None:
+    """把内嵌 JSON 里的 ``media/posts/…`` 等旧前缀改写为 ``媒体/微博图片/…``。"""
+    for table, id_column, json_column in _EMBEDDED_JSON_COLUMNS:
+        rows = connection.execute(
+            f"SELECT {id_column}, {json_column} FROM {table} "
+            f"WHERE {json_column} LIKE '%media/%'"
+        ).fetchall()
+        for row_id, text in rows:
+            refs = {match.group(0) for match in _V4_EMBEDDED_REF.finditer(text)}
+            if not refs:
+                continue
+            updated = text
+            for ref in refs:
+                for old_prefix, new_prefix in _V4_PREFIX_REWRITES.items():
+                    if ref.startswith(old_prefix):
+                        updated = updated.replace(
+                            ref, new_prefix + ref[len(old_prefix):]
+                        )
+                        break
+            if updated != text:
+                connection.execute(
+                    f"UPDATE {table} SET {json_column} = ? WHERE {id_column} = ?",
+                    (updated, row_id),
+                )
+                stats["embedded_rows"] += 1
+
+
+def _migrate_to_v4(
+    media_root: Path, connection: sqlite3.Connection, stats: dict[str, int]
+) -> None:
+    """v3→v4：媒体子目录改中文名 + local_path 与内嵌 JSON 前缀改写。"""
+    if media_root.exists() or media_root.is_symlink():
+        marker = media_root.lstat()
+        if stat.S_ISLNK(marker.st_mode) or not media_root.is_dir():
+            raise WeiboError(
+                "归档媒体目录类型不安全，已停止迁移",
+                kind=WeiboErrorKind.API,
+                recoverable=False,
+            )
+        for old, new in MEDIA_SUBDIR_RENAMES.items():
+            _rename_media_subdir(media_root, old, new)
+    _rewrite_local_path_column(connection, "media", stats)
+    _rewrite_local_path_column(connection, "profile_assets", stats)
+    _rewrite_embedded_prefixes(connection, stats)
+
+
+def _migrate_flat_files(
+    media_root: Path, connection: sqlite3.Connection, stats: dict[str, int]
+) -> None:
+    """v1→v2：把 media 表记录的平铺文件搬到年-月目录。
+
+    ``local_path`` 保持 ``media/<子目录>/…`` 旧前缀（数据库值），文件
+    系统位置相对 ``media_root``（其下第一层即 posts/comments 等子目录）。
+    """
     post_year_month, comment_post = _migration_time_index(connection)
     rows = connection.execute(
         "SELECT id, owner_id, local_path, sha256 FROM media ORDER BY rowid"
@@ -257,8 +454,8 @@ def _migrate_flat_files(
             )
             continue
         target_relative = f"media/{parts[1]}/{year_month[0]}/{year_month[1]}/{parts[2]}"
-        source = root.joinpath(*parts)
-        target = root.joinpath(*target_relative.split("/"))
+        source = media_root.joinpath(*parts[1:])
+        target = media_root.joinpath(*target_relative.split("/")[1:])
         if source.is_symlink() or (source.exists() and not source.is_file()):
             raise WeiboError(
                 "归档媒体源文件类型不安全，已停止迁移",

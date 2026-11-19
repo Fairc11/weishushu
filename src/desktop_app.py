@@ -260,6 +260,8 @@ def main() -> int:
             window_title_text = window_title()
         except Exception:
             window_title_text = "微书薯"
+        from desktop.native_glass import native_glass_supported
+        use_native_glass = native_glass_supported()
         window = webview.create_window(
             title=window_title_text,
             url=f"http://127.0.0.1:{port}/",
@@ -273,11 +275,16 @@ def main() -> int:
             text_select=True,
             js_api=js_api,
             localization=CHINESE_LOCALIZATION,
+            # macOS 26+：窗口透明，由原生液态玻璃绘制背景（失败时网页自行绘制不透明背景）
+            transparent=use_native_glass,
         )
     except Exception as e:
         logger.exception("webview.create_window 失败: %s", e)
         return 2
     js_api.set_window(window)
+    if use_native_glass:
+        from desktop.native_glass import install_native_glass
+        install_native_glass(window)
     from backend.app.services.task_manager import task_manager
     close_protection = DesktopCloseProtection(task_manager, js_api)
     window.events.closing += close_protection.handle_closing

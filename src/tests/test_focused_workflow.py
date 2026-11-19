@@ -75,6 +75,7 @@ global.confirm = () => true;
 global.prompt = () => '';
 eval({app_source!r});
 const Ptu = window.Ptu;
+Ptu.Api.backupVideoQualityCheck = async () => ({{task_id:null, summary:{{available_count:0, unchecked_count:0, failed_count:0}}}});
 {test_source}
 """
 
@@ -92,13 +93,20 @@ class FocusedWorkflowRenderTests(unittest.TestCase):
             'id="login-menu"',
             'class="login-menu" hidden',
             'aria-expanded="false"',
-            'id="history-toggle"',
-            'aria-label="历史记录"',
-            'id="btn-browser"',
-            'aria-label="浏览器"',
+            'id="settings-toggle"',
+            'aria-label="设置"',
             'id="theme-toggle"',
         ):
             self.assertIn(token, response.text)
+        # 顶栏书库按钮与微博书库页签重复，已移除；Chrome 导入按钮前端移除、后端接口封存
+        self.assertNotIn('id="history-toggle"', response.text)
+        self.assertNotIn('id="btn-chrome"', response.text)
+
+    def test_header_no_longer_exposes_browser_placeholder_button(self):
+        """顶栏不再渲染只弹「开发中」的 btn-browser 占位按钮；同窗浏览器面板与后端接口保留。"""
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('id="btn-browser"', response.text)
 
     def test_primary_url_action_precedes_settings_without_floating_history_button(self):
         response = self.client.get("/")
@@ -136,11 +144,11 @@ class FocusedWorkflowRenderTests(unittest.TestCase):
         ):
             self.assertIn(token, html)
 
-    def test_progress_section_contains_six_stage_card(self):
+    def test_progress_section_contains_actual_archive_stages(self):
         response = self.client.get("/")
         html = response.text
         self.assertIn('id="progress-stage-card"', html)
-        for phase in ("identify", "extract", "media", "generate", "report", "complete"):
+        for phase in ("identify", "extract", "media", "generate", "complete"):
             self.assertIn(f'data-progress-phase="{phase}"', html)
         for token in ('id="progress-stage-detail"', 'id="progress-stage-count"', 'id="progress-stage-elapsed"'):
             self.assertIn(token, html)
@@ -479,6 +487,7 @@ Ptu.toast = () => {};
   if (overlay.hidden) throw new Error('启动期间 Escape 关闭了对话框');
   Ptu.closeArchiveFolderDecision();
   if (overlay.hidden) throw new Error('启动期间遮罩关闭了对话框');
+  for (let i=0; i<10 && !resolveStart; i++) await Promise.resolve();
   resolveStart({ task_id:'task-1', self_screen_name:'本人' });
   await pending;
 })().catch((error) => { console.error(error); process.exit(1); });
@@ -592,6 +601,7 @@ Ptu.toast = (message) => messages.push(message);
 (async () => {
   const pending = Ptu.startArchiveBackup('incremental');
   Ptu.startArchiveBackup('incremental');
+  for (let i=0; i<10 && !resolveStart; i++) await Promise.resolve();
   if (!slowTimer) throw new Error('未建立 15 秒慢启动提示');
   slowTimer();
   await Promise.resolve();

@@ -158,6 +158,15 @@ input[type="radio"] {
   line-height: 1.5;
 }
 
+#login-badge {
+  display: inline-block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
 .badge-muted,
 .wb-badge-muted {
   color: var(--wb-text-2);
@@ -497,6 +506,82 @@ input[type="radio"] {
   color: var(--wb-text-2);
   font-size: 12px;
   text-align: center;
+}
+
+/* v2.1.0 设置面板 */
+.settings-modal {
+  width: min(520px, 100%);
+}
+
+.settings-scroll h3 {
+  margin: var(--wb-space-4) 0 var(--wb-space-2);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.settings-scroll h3:first-child {
+  margin-top: 0;
+}
+
+.settings-line {
+  margin: var(--wb-space-1) 0;
+  font-size: 13px;
+}
+
+.settings-actions {
+  justify-content: flex-start;
+  margin-top: var(--wb-space-2);
+}
+
+.settings-switch {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: var(--wb-space-2) 0;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.settings-switch input {
+  margin-top: 3px;
+  accent-color: var(--wb-primary);
+}
+
+.settings-list {
+  display: grid;
+  gap: 4px;
+  margin: var(--wb-space-1) 0 var(--wb-space-2);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--wb-border-strong);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.settings-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#settings-toggle {
+  position: relative;
+}
+
+.settings-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--wb-danger);
 }
 
 .risk-actions,

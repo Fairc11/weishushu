@@ -10,7 +10,11 @@ export function init(ctx = Ptu) {
         document.documentElement.setAttribute('data-theme', saved);
       }
       Ptu.State.isDesktop = !!(global.pywebview && global.pywebview.api);
+      Ptu.syncNativeAppearance();
+      if (typeof global.addEventListener === 'function') global.addEventListener('pywebviewready', () => Ptu.syncNativeAppearance(), { once: true });
       Ptu.bindEvents();
+      Ptu.initTaskProgressView();
+      Ptu.switchWorkspaceTab('library');
       Ptu.updateMainScopeUi();
       Ptu.initSplitView();  // v1.2.0 stage4 B+
       global.addEventListener('pywebviewready', () => Ptu.onDesktopReady(), { once: true });
@@ -21,6 +25,8 @@ export function init(ctx = Ptu) {
         Ptu.State.firstRunAccepted = accepted;
         if (accepted) Ptu.checkRecoveryTask();
         Ptu.refreshLoginStatus();
+        // 风险须知已确认才检查更新；未确认时由确认按钮触发
+        if (accepted) Ptu.maybeAutoCheckUpdate();
       });
     },
 
@@ -32,9 +38,7 @@ export function init(ctx = Ptu) {
         Ptu.State.platform = null;
       }
       const qrBtn = Ptu.$('btn-qrcode');
-      const chromeBtn = Ptu.$('btn-chrome');
       if (qrBtn) qrBtn.textContent = '扫码登录';
-      if (chromeBtn) chromeBtn.hidden = false;
       Ptu.syncNativeBrowserFrame();
     },
 
@@ -308,8 +312,8 @@ export function init(ctx = Ptu) {
       // 步骤 2 登录
       const qrBtn = Ptu.$('btn-qrcode');
       if (qrBtn) qrBtn.addEventListener('click', () => Ptu.loginQrcode());
-      const chBtn = Ptu.$('btn-chrome');
-      if (chBtn) chBtn.addEventListener('click', () => Ptu.futureFeature());
+      const selfLoginBtn = Ptu.$('btn-self-login');
+      if (selfLoginBtn) selfLoginBtn.addEventListener('click', () => Ptu.loginQrcode());
       const logoutBtn = Ptu.$('btn-logout');
       if (logoutBtn) logoutBtn.addEventListener('click', () => Ptu.logout());
       const qrcodeRetry = Ptu.$('qrcode-login-retry');
@@ -319,6 +323,51 @@ export function init(ctx = Ptu) {
       // v1.1.5 一键备份本人
       const backupBtn = Ptu.$('btn-backup-self');
       if (backupBtn) backupBtn.addEventListener('click', () => Ptu.backupSelf());
+      // v2.1.0 分段回填 / 重新生成 HTML / 他人建档 / 保存格式
+      const backfillStart = Ptu.$('btn-backfill-start');
+      if (backfillStart) backfillStart.addEventListener('click', () => Ptu.startBackfill());
+      const topicSupplement = Ptu.$('btn-supertopic-supplement');
+      if (topicSupplement) topicSupplement.addEventListener('click', () => Ptu.startSupertopicSupplement());
+      const targetBackfillStart = Ptu.$('btn-target-backfill-start');
+      if (targetBackfillStart) targetBackfillStart.addEventListener('click', () => Ptu.startTargetBackfill());
+      const archivePreview = Ptu.$('btn-archive-preview');
+      if (archivePreview) archivePreview.addEventListener('click', () => Ptu.startArchivePreview());
+      const targetRegenerate = Ptu.$('btn-target-regenerate');
+      if (targetRegenerate) targetRegenerate.addEventListener('click', () => Ptu.regenerateArchiveHtml(Ptu.State.backupFolderDir, Ptu.State.archiveTarget?.uid));
+      const pickTargetFolder = Ptu.$('btn-pick-target-folder');
+      if (pickTargetFolder) pickTargetFolder.addEventListener('click', () => Ptu.pickTargetFolder());
+      // v2.2.0：三处入口的范围与节奏统一在“备份设置”抽屉中选择
+      Ptu.$('btn-start-other-backup')?.addEventListener('click', () => Ptu.openTargetDrawer());
+      Ptu.$('btn-target-settings')?.addEventListener('click', () => Ptu.openTargetDrawer());
+      Ptu.$('btn-target-backfill-open')?.addEventListener('click', () => Ptu.openTargetDrawer());
+      Ptu.$('btn-self-settings')?.addEventListener('click', () => Ptu.openSelfDrawer());
+      Ptu.$('archive-drawer-close')?.addEventListener('click', () => Ptu.closeArchiveDrawer());
+      Ptu.$('archive-drawer')?.addEventListener('click', (event) => { if (event.target === Ptu.$('archive-drawer')) Ptu.closeArchiveDrawer(); });
+      Ptu.$('drawer-primary')?.addEventListener('click', () => Ptu.startFromDrawer('primary'));
+      Ptu.$('drawer-backfill-start')?.addEventListener('click', () => Ptu.startFromDrawer('backfill'));
+      Ptu.$('drawer-fmt-pdf')?.addEventListener('change', () => Ptu.saveDrawerFormats());
+      Ptu.$('drawer-fmt-markdown')?.addEventListener('change', () => Ptu.saveDrawerFormats());
+      document.querySelectorAll('input[name="drawer-pacing-mode"]').forEach((input) => input.addEventListener('change', () => Ptu.syncDrawerPacing()));
+      const bindChips = (id, apply) => {
+        const group = Ptu.$(id);
+        if (!group) return;
+        group.querySelectorAll('.chip').forEach((chip) => {
+          chip.addEventListener('click', () => {
+            group.querySelectorAll('.chip').forEach((x) => x.classList.remove('on'));
+            chip.classList.add('on');
+            apply(Number(chip.dataset.months));
+          });
+        });
+      };
+      bindChips('create-range-chips', (value) => { Ptu.State.createRangeMonths = value; });
+      bindChips('backfill-chips', (value) => { Ptu.State.backfillMonths = value; });
+      bindChips('target-backfill-chips', (value) => { Ptu.State.targetBackfillMonths = value; });
+      bindChips('drawer-create-chips', () => {});
+      bindChips('drawer-backfill-chips', () => {});
+      const fmtPdf = Ptu.$('fmt-pdf');
+      if (fmtPdf) fmtPdf.addEventListener('change', () => Ptu.saveOutputFormats());
+      const fmtMarkdown = Ptu.$('fmt-markdown');
+      if (fmtMarkdown) fmtMarkdown.addEventListener('change', () => Ptu.saveOutputFormats());
       const mainScope = Ptu.$('set-scope');
       if (mainScope) mainScope.addEventListener('change', () => Ptu.updateMainScopeUi());
       const archiveOverlay = Ptu.$('archive-folder-decision');
@@ -341,16 +390,35 @@ export function init(ctx = Ptu) {
       });
       document.addEventListener('keydown', (event) => Ptu.handleArchiveDialogKeydown(event));
       // v1.1.6 历史记录面板 + 搜索
+      document.querySelectorAll('[data-workspace-tab]').forEach(button => {
+        button.addEventListener('click', () => Ptu.switchWorkspaceTab(button.dataset.workspaceTab));
+      });
       const historyPanel = Ptu.$('history-panel');
       if (historyPanel) Ptu.State.historyPanelHome = historyPanel.parentElement;
-      const histBtn = Ptu.$('history-toggle');
-      if (histBtn) histBtn.addEventListener('click', () => Ptu.toggleHistory(true));
+      const settingsBtn = Ptu.$('settings-toggle');
+      if (settingsBtn) settingsBtn.addEventListener('click', () => Ptu.toggleSettings());
+      const settingsClose = Ptu.$('settings-close-btn');
+      if (settingsClose) settingsClose.addEventListener('click', () => Ptu.toggleSettings(false));
+      const checkUpdate = Ptu.$('btn-check-update');
+      if (checkUpdate) checkUpdate.addEventListener('click', () => Ptu.checkForUpdates());
+      const installUpdate = Ptu.$('btn-install-update');
+      if (installUpdate) installUpdate.addEventListener('click', () => Ptu.installUpdate());
+      Ptu.$('update-modal-later')?.addEventListener('click', () => Ptu.closeUpdatePrompt(false));
+      Ptu.$('update-modal-skip')?.addEventListener('click', () => Ptu.closeUpdatePrompt(true));
+      Ptu.$('update-modal-install')?.addEventListener('click', () => Ptu.installFromUpdatePrompt());
+      Ptu.$('update-modal-open')?.addEventListener('click', () => { Ptu.closeUpdatePrompt(false); Ptu.openReleasePage(); });
+      const openDataDir = Ptu.$('btn-open-data-dir');
+      if (openDataDir) openDataDir.addEventListener('click', () => Ptu.openDataDirFromSettings());
+      const rereadRisk = Ptu.$('btn-reread-risk');
+      if (rereadRisk) rereadRisk.addEventListener('click', () => Ptu.showRiskModal({ readonly: true }));
+      const autoUpdateCheck = Ptu.$('settings-auto-update-check');
+      if (autoUpdateCheck) autoUpdateCheck.addEventListener('change', () => Ptu.setSettingsFlag('weishushu.autoCheckUpdate', autoUpdateCheck.checked));
+      const notifyTask = Ptu.$('settings-notify-task');
+      if (notifyTask) notifyTask.addEventListener('change', () => Ptu.setSettingsFlag('weishushu.notifyOnTaskDone', notifyTask.checked));
       const histClose = Ptu.$('history-close');
       if (histClose) histClose.addEventListener('click', () => Ptu.toggleHistory(false));
       const pickFolderBtn = Ptu.$('btn-pick-history-folder');
       if (pickFolderBtn) pickFolderBtn.addEventListener('click', () => Ptu.pickHistoryFolder());
-      const searchBtn = Ptu.$('btn-search');
-      if (searchBtn) searchBtn.addEventListener('click', () => Ptu.runSearch());
       // 浮动日志
       const logBtn = Ptu.$('log-toggle');
       if (logBtn) {
@@ -358,9 +426,6 @@ export function init(ctx = Ptu) {
       }
       const logClose = Ptu.$('log-close');
       if (logClose) logClose.addEventListener('click', () => Ptu.toggleLogPanel(false));
-      // v1.2.0 V120-2: 浏览器按钮
-      const browserBtn = Ptu.$('btn-browser');
-      if (browserBtn) browserBtn.addEventListener('click', () => Ptu.futureFeature());
       // v1.2.0 收口 A: 浏览器控制台面板按钮
       const browserPanelClose = Ptu.$('browser-panel-close');
       if (browserPanelClose) browserPanelClose.addEventListener('click', () => Ptu.toggleBrowserPanel(false));
@@ -382,6 +447,15 @@ export function init(ctx = Ptu) {
       Ptu.State.theme = Ptu.State.theme === 'light' ? 'dark' : 'light';
       document.documentElement.setAttribute('data-theme', Ptu.State.theme);
       Ptu.safeLocalSet('weishushu.theme', Ptu.State.theme);
+      Ptu.syncNativeAppearance();
+    },
+
+    // macOS 原生玻璃由系统绘制，需随 App 主题切换外观；其他环境没有该接口时直接跳过
+    syncNativeAppearance() {
+      const api = global.pywebview && global.pywebview.api;
+      if (api && typeof api.set_native_appearance === 'function') {
+        Promise.resolve(api.set_native_appearance(Ptu.State.theme)).catch(() => {});
+      }
     },
   });
   return ctx;

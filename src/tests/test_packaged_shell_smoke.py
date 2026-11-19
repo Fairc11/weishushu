@@ -28,7 +28,7 @@ class _FakeWindow:
     def evaluate_js(self, script: str):
         self.evaluate_calls.append(script)
         if "getAttribute('data-weishushu-version')" in script:
-            return "2.0.0" if self.bridge_ready else ""
+            return shell.CURRENT_VERSION if self.bridge_ready else ""
         if "document.cookie='" in script:
             if "weishushu_self_test=ok" in script:
                 self.cookie = "weishushu_self_test=ok"

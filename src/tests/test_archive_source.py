@@ -36,7 +36,7 @@ class FakeClient:
 
     def get_user_posts(self, uid, page, expand, with_comments):
         self.profile_calls.append((uid, page, expand, with_comments))
-        return self.pages[page]
+        return self.pages.get(page, [])
 
     def get_post_by_bid(self, bid, with_comments):
         self.post_calls.append((bid, with_comments))
@@ -74,6 +74,7 @@ def test_source_uses_existing_client_converter_and_comment_fetcher():
     assert extractor.client.profile_calls == [
         ("10001", 1, False, False),
         ("10001", 2, False, False),
+        ("10001", 3, False, False),
     ]
     assert extractor.client.post_calls == [("A", False)]
     assert post.bid == "A"
@@ -128,13 +129,13 @@ def test_media_stager_downloads_only_into_work_and_returns_records(tmp_path):
 
     assert created_roots == [work_root]
     paths = {item.record.local_path for item in staged}
-    assert "media/comments/2026/07/A_c1.jpg" in paths
-    assert any(path.startswith("media/posts/2026/07/A_image_0_") for path in paths)
-    assert any(path.startswith("media/posts/2020/01/R_image_0_") for path in paths)
+    assert "媒体/评论图片/2026/07/A_c1.jpg" in paths
+    assert any(path.startswith("媒体/微博图片/2026/07/A_image_0_") for path in paths)
+    assert any(path.startswith("媒体/微博图片/2020/01/R_image_0_") for path in paths)
     assert all(item.staged_path.is_relative_to(work_root) for item in staged)
     assert all(item.staged_path.is_file() for item in staged)
-    assert post.media[0].local_path.startswith("media/posts/2026/07/A_image_0_")
-    assert comment.local_image == "media/comments/2026/07/A_c1.jpg"
+    assert post.media[0].local_path.startswith("媒体/微博图片/2026/07/A_image_0_")
+    assert comment.local_image == "媒体/评论图片/2026/07/A_c1.jpg"
 
 
 def test_media_stager_localizes_main_retweet_and_comment_avatars(tmp_path):
@@ -158,7 +159,7 @@ def test_media_stager_localizes_main_retweet_and_comment_avatars(tmp_path):
     assert {(item.record.owner_type,item.record.owner_id,item.record.role) for item in staged} == {
         ("user","10001","avatar"),("retweeted_user","20002","avatar"),("comment","30003","avatar")
     }
-    assert all(item.record.local_path.startswith("media/avatars/") for item in staged)
+    assert all(item.record.local_path.startswith("媒体/头像/") for item in staged)
 
 
 def test_avatar_url_change_creates_new_content_addressed_path_and_retains_old(tmp_path, monkeypatch):
@@ -320,3 +321,38 @@ def test_self_mode_probe_session_still_rejects_account_mismatch():
         assert exc.pause_reason == "account_mismatch"
     else:
         raise AssertionError("本人模式登录账号不一致必须暂停")
+
+
+def test_empty_page_followed_by_posts_is_not_treated_as_last_page():
+    """一页没有可解析的微博时，不能据此判定主页翻到底（会误标历史完整）。"""
+    extractor = FakeExtractor()
+    extractor.client.pages = {
+        1: [_crawl_post("A")],
+        2: [],
+        3: [_crawl_post("B")],
+        4: [],
+        5: [],
+    }
+    source = WeiboArchiveSource(
+        extractor, self_uid="10001", image_quality=ImageQuality.ORIGINAL
+    )
+
+    pages = list(source.iter_profile_pages("10001"))
+
+    assert [[item.bid for item in page.items] for page in pages] == [["A"], [], ["B"], []]
+    assert [page.is_last for page in pages] == [False, False, False, True]
+    assert [call[1] for call in extractor.client.profile_calls] == [1, 2, 3, 4, 5]
+
+
+def test_two_consecutive_empty_pages_end_the_profile():
+    extractor = FakeExtractor()
+    extractor.client.pages = {1: [_crawl_post("A")], 2: [], 3: []}
+    source = WeiboArchiveSource(
+        extractor, self_uid="10001", image_quality=ImageQuality.ORIGINAL
+    )
+
+    pages = list(source.iter_profile_pages("10001"))
+
+    assert [[item.bid for item in page.items] for page in pages] == [["A"], []]
+    assert pages[-1].is_last is True
+    assert [call[1] for call in extractor.client.profile_calls] == [1, 2, 3]

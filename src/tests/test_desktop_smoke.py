@@ -21,7 +21,7 @@ class JsApiSmokeTests(unittest.TestCase):
         from js_api import JsApi
         v = JsApi().get_version()
         self.assertIsInstance(v, str)
-        self.assertEqual(v, "2.0.1")
+        self.assertEqual(v, "2.2.0")
 
     def test_set_window_stores_reference(self):
         from js_api import JsApi

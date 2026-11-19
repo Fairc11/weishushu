@@ -28,20 +28,20 @@ def _post(**changes):
     return PostRecord(**values)
 
 
-def test_create_writes_manifest_and_exact_v2_schema(tmp_path):
+def test_create_writes_manifest_and_exact_v4_schema(tmp_path):
     from weibo_book.archive.repository import ArchiveRepository
 
     root = tmp_path / "archive"
     repository = ArchiveRepository.create(root, uid="10001", screen_name="测试用户")
 
-    assert json.loads((root / "manifest.json").read_text(encoding="utf-8")) == {
+    assert json.loads((root / "数据与媒体" / "数据" / "manifest.json").read_text(encoding="utf-8")) == {
         "created_at": repository.manifest().created_at,
         "last_successful_sync_at": "",
-        "schema_version": 2,
+        "schema_version": 4,
         "screen_name": "测试用户",
         "uid": "10001",
     }
-    connection = sqlite3.connect(root / "data" / "archive.db")
+    connection = sqlite3.connect((root / "数据与媒体" / "数据" / "archive.db"))
     tables = {
         row[0]
         for row in connection.execute(
@@ -63,6 +63,9 @@ def test_create_writes_manifest_and_exact_v2_schema(tmp_path):
         "following_names",
         "following_changes",
         "following_state",
+        "profile_assets",
+        "pin_observations",
+        "fans_observations",
     }
     assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert repository._connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
@@ -70,7 +73,7 @@ def test_create_writes_manifest_and_exact_v2_schema(tmp_path):
         connection.execute(
             "SELECT value_json FROM archive_meta WHERE key = 'schema_version'"
         ).fetchone()[0]
-    ) == 2
+    ) == 4
 
     expected_columns = {
         "archive_meta": [
@@ -192,6 +195,28 @@ def test_create_writes_manifest_and_exact_v2_schema(tmp_path):
             (0, "singleton", "INTEGER", 0, None, 1),
             (1, "current_snapshot_id", "TEXT", 0, None, 0),
         ],
+        "profile_assets": [
+            (0, "id", "INTEGER", 0, None, 1),
+            (1, "kind", "TEXT", 1, None, 0),
+            (2, "remote_url", "TEXT", 1, None, 0),
+            (3, "local_path", "TEXT", 1, "''", 0),
+            (4, "sha256", "TEXT", 1, "''", 0),
+            (5, "first_seen_at", "TEXT", 1, None, 0),
+            (6, "run_id", "TEXT", 1, "''", 0),
+        ],
+        "pin_observations": [
+            (0, "id", "INTEGER", 0, None, 1),
+            (1, "run_id", "TEXT", 1, "''", 0),
+            (2, "observed_at", "TEXT", 1, None, 0),
+            (3, "bid", "TEXT", 1, None, 0),
+            (4, "pin_order", "INTEGER", 0, None, 0),
+        ],
+        "fans_observations": [
+            (0, "id", "INTEGER", 0, None, 1),
+            (1, "run_id", "TEXT", 1, "''", 0),
+            (2, "observed_at", "TEXT", 1, None, 0),
+            (3, "followers_count", "INTEGER", 1, None, 0),
+        ],
     }
     for table, columns in expected_columns.items():
         assert connection.execute(f"PRAGMA table_info({table})").fetchall() == columns
@@ -221,6 +246,9 @@ def test_create_writes_manifest_and_exact_v2_schema(tmp_path):
     assert unique_index_columns("media") == {
         ("owner_type", "owner_id", "role", "position")
     }
+    assert unique_index_columns("profile_assets") == {("kind", "remote_url")}
+    assert unique_index_columns("pin_observations") == {("run_id", "bid")}
+    assert unique_index_columns("fans_observations") == {("run_id",)}
 
     connection.close()
     repository.close()
@@ -232,8 +260,8 @@ def test_create_writes_schema_two_following_tables(tmp_path):
     root = tmp_path / "archive"
     repository = ArchiveRepository.create(root, uid="10001", screen_name="测试用户")
 
-    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["schema_version"] == 2
+    manifest = json.loads((root / "数据与媒体" / "数据" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 4
     tables = {
         row[0]
         for row in repository._connection.execute(
@@ -410,7 +438,7 @@ def test_render_read_methods_return_schema_records_in_stable_row_order(tmp_path)
     repository.replace_current_comments(
         "A", [CommentRecord("C", "A", None, {"text": "评论"}, "captured")]
     )
-    repository.upsert_media(MediaRecord("post", "A", "image", 0, "remote", "media/a.jpg"))
+    repository.upsert_media(MediaRecord("post", "A", "image", 0, "remote", "媒体/微博图片/a.jpg"))
 
     assert [row.bid for row in repository.list_posts_for_render()] == ["B", "A"]
     assert repository.list_comments_for_render()[0].payload == {"text": "评论"}
@@ -506,7 +534,7 @@ def test_media_unique_key_is_upserted(tmp_path):
 
     repository = _create_repository(tmp_path)
     repository.upsert_media(
-        MediaRecord("post", "P001", "image", 0, "https://example.test/old", "media/1.jpg")
+        MediaRecord("post", "P001", "image", 0, "https://example.test/old", "媒体/微博图片/1.jpg")
     )
     repository.upsert_media(
         MediaRecord(
@@ -515,13 +543,13 @@ def test_media_unique_key_is_upserted(tmp_path):
             "image",
             0,
             "https://example.test/new",
-            "media/1-new.jpg",
+            "媒体/微博图片/1-new.jpg",
             "sha-new",
         )
     )
     assert repository._connection.execute(
         "SELECT remote_url, local_path, sha256 FROM media"
-    ).fetchall() == [("https://example.test/new", "media/1-new.jpg", "sha-new")]
+    ).fetchall() == [("https://example.test/new", "媒体/微博图片/1-new.jpg", "sha-new")]
     repository.close()
 
 
@@ -573,7 +601,7 @@ def test_manifest_write_failure_leaves_no_manifest_or_temporary_file(tmp_path, m
     with pytest.raises(ArchiveError, match="创建归档失败"):
         ArchiveRepository.create(root, uid="10001", screen_name="测试用户")
 
-    assert not (root / "manifest.json").exists()
+    assert not (root / "数据与媒体" / "数据" / "manifest.json").exists()
     assert list(root.glob("*manifest*.tmp")) == []
 
 
@@ -635,7 +663,7 @@ def test_open_reports_missing_database_in_chinese(tmp_path):
     repository = _create_repository(tmp_path)
     root = repository._root
     repository.close()
-    (root / "data" / "archive.db").unlink()
+    (root / "数据与媒体" / "数据" / "archive.db").unlink()
 
     with pytest.raises(ArchiveError, match="归档数据库不存在"):
         ArchiveRepository.open(root, expected_uid="10001")
@@ -647,7 +675,7 @@ def test_open_reports_damaged_database_in_chinese(tmp_path):
     repository = _create_repository(tmp_path)
     root = repository._root
     repository.close()
-    (root / "data" / "archive.db").write_bytes(b"not a sqlite database")
+    (root / "数据与媒体" / "数据" / "archive.db").write_bytes(b"not a sqlite database")
 
     with pytest.raises(ArchiveError, match="归档数据库损坏"):
         ArchiveRepository.open(root, expected_uid="10001")
@@ -708,12 +736,12 @@ def test_open_rejects_unsupported_manifest_schema_version(tmp_path):
     repository = _create_repository(tmp_path)
     root = repository._root
     repository.close()
-    manifest_path = root / "manifest.json"
+    manifest_path = root / "数据与媒体" / "数据" / "manifest.json"
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    payload["schema_version"] = 3
+    payload["schema_version"] = 5
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ArchiveError, match="归档版本不受支持：3"):
+    with pytest.raises(ArchiveError, match="归档版本不受支持：5"):
         ArchiveRepository.open(root, expected_uid="10001")
 
 
@@ -732,6 +760,9 @@ def test_open_migrates_exact_schema_one_without_changing_existing_data(tmp_path)
         "following_objects",
         "following_snapshot_items",
         "following_snapshots",
+        "profile_assets",
+        "pin_observations",
+        "fans_observations",
     ):
         repository._connection.execute(f"DROP TABLE {table}")
     repository._connection.execute(
@@ -739,21 +770,21 @@ def test_open_migrates_exact_schema_one_without_changing_existing_data(tmp_path)
     )
     repository._connection.commit()
     repository.close()
-    manifest_path = root / "manifest.json"
+    manifest_path = root / "数据与媒体" / "数据" / "manifest.json"
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["schema_version"] = 1
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
 
     migrated = ArchiveRepository.open(root, expected_uid="10001")
 
-    assert migrated.manifest().schema_version == 2
+    assert migrated.manifest().schema_version == 4
     assert migrated.get_post("P001") == _post()
     migrated.upsert_post(_post(bid="P002", text="迁移后新增"))
     assert [item.bid for item in migrated.list_posts_for_render()] == ["P001", "P002"]
     assert migrated._connection.execute(
         "SELECT singleton, current_snapshot_id FROM following_state"
     ).fetchall() == [(1, None)]
-    assert json.loads(manifest_path.read_text(encoding="utf-8"))["schema_version"] == 2
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["schema_version"] == 4
     migrated.close()
 
 
@@ -763,15 +794,15 @@ def test_open_coordinates_schema_two_database_with_schema_one_manifest(tmp_path)
     repository = _create_repository(tmp_path)
     root = repository._root
     repository.close()
-    manifest_path = root / "manifest.json"
+    manifest_path = root / "数据与媒体" / "数据" / "manifest.json"
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["schema_version"] = 1
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
 
     coordinated = ArchiveRepository.open(root, expected_uid="10001")
 
-    assert coordinated.manifest().schema_version == 2
-    assert json.loads(manifest_path.read_text(encoding="utf-8"))["schema_version"] == 2
+    assert coordinated.manifest().schema_version == 4
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["schema_version"] == 4
     coordinated.close()
 
 
@@ -815,7 +846,7 @@ def test_open_rejects_following_relationship_index_without_partial_predicate(tmp
     repository = _create_repository(tmp_path)
     root = repository._root
     repository.close()
-    connection = sqlite3.connect(root / "data" / "archive.db")
+    connection = sqlite3.connect((root / "数据与媒体" / "数据" / "archive.db"))
     connection.execute("DROP INDEX following_relationships_one_open")
     connection.execute(
         "CREATE UNIQUE INDEX following_relationships_one_open "

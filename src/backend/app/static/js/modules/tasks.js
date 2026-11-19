@@ -10,6 +10,51 @@ export function init(ctx = Ptu) {
       Ptu.$('progress-text').textContent = msg || `${(pct * 100).toFixed(0)}%`;
     },
 
+    formatDuration(value) {
+      const seconds = Number.isFinite(Number(value)) ? Math.max(0, Math.floor(Number(value))) : 0;
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const parts = [];
+      if (hours) parts.push(`${hours} 小时`);
+      if (minutes || hours) parts.push(`${minutes} 分`);
+      parts.push(`${seconds % 60} 秒`);
+      return parts.join(' ');
+    },
+
+    renderTimings(timings) {
+      const labels = {discover:'发现微博', detail:'读取详情', comments:'读取评论', media:'处理普通媒体',
+        storage:'校验与保存', profile:'更新资料', live_replay:'直播回放', supertopic:'超话检查', generate:'生成文件',
+        publish:'安全写入', cleanup:'检查媒体引用', request:'请求处理（含在所属阶段内）', wait:'主动等待（含在所属阶段内）'};
+      const entries = Object.entries(labels).filter(([key]) => Number.isFinite(timings?.[key]) && timings[key] > 0);
+      const card = Ptu.$('progress-timings');
+      const list = Ptu.$('progress-timings-list');
+      if (card) card.hidden = !entries.length;
+      if (list) list.innerHTML = entries.map(([key, label]) => `<div><dt>${label}</dt><dd>${Ptu.formatDuration(timings[key])}</dd></div>`).join('');
+    },
+
+    updateTaskMini() {
+      const mini = Ptu.$('task-mini');
+      const card = Ptu.$('step-progress');
+      const area = Ptu.$('main-area');
+      if (!mini) return;
+      // v2.2.0：迷你进度位于侧边栏，任务运行期间在任何页签都一直显示
+      mini.hidden = !Ptu.State.taskId || !card || card.hidden;
+    },
+
+    initTaskProgressView() {
+      const area = Ptu.$('main-area');
+      const card = Ptu.$('step-progress');
+      if (!area || !card) return;
+      area.addEventListener('scroll', () => Ptu.updateTaskMini(), {passive:true});
+      if (typeof ResizeObserver !== 'undefined') {
+        Ptu.taskProgressObserver = new ResizeObserver(() => Ptu.updateTaskMini());
+        Ptu.taskProgressObserver.observe(card);
+        Ptu.taskProgressObserver.observe(area);
+      }
+      Ptu.$('task-mini-expand')?.addEventListener('click', () => card.scrollIntoView({block:'start', behavior:'smooth'}));
+      Ptu.$('task-mini-cancel')?.addEventListener('click', () => Ptu.cancelTask());
+    },
+
     renderProgressEvent(event) {
       if (!event || !event.phase) return;
       const phases = ['identify', 'extract', 'media', 'generate', 'report', 'complete'];
@@ -30,15 +75,35 @@ export function init(ctx = Ptu) {
       const elapsed = Ptu.$('progress-stage-elapsed');
       const track = Ptu.$('progress-stage-track');
       if (detail) detail.textContent = event.detail || '正在处理…';
-      const unitNames = { account: '个账号', post: '条', media: '个媒体', file: '个文件' };
+      const unitNames = { account: '个账号', post: '条', media: '个媒体', file: '个文件', segment:'段', batch:'批', video:'个视频', archive:'份档案', page:'页' };
       const unit = unitNames[event.unit] || '';
       if (count) {
         const pageText = event.current_page ? `第 ${event.current_page} 页 · ` : '';
         if (event.current == null) count.textContent = pageText || '尚无计数';
         else if (event.total == null) count.textContent = `${pageText}已处理 ${event.current}${unit} · 总量未知`;
-        else count.textContent = `${pageText}${event.current}/${event.total}${unit}`;
+        else count.textContent = `${pageText}已完成 ${event.current}/${event.total}${unit} · 剩余 ${Math.max(0, event.total - event.current)}${unit}`;
       }
-      if (elapsed) elapsed.textContent = `${Number(event.elapsed_seconds || 0).toFixed(1)} 秒`;
+      if (elapsed) elapsed.textContent = `本次运行耗时 ${Ptu.formatDuration(event.elapsed_seconds)}`;
+      const metrics = Ptu.$('progress-stage-metrics');
+      const values = [];
+      if (Number.isFinite(event.phase_elapsed_seconds)) values.push(`当前步骤 ${Ptu.formatDuration(event.phase_elapsed_seconds)}`);
+      if (Number.isFinite(event.completed_bytes)) {
+        const gb = event.completed_bytes >= 1024 ** 3;
+        values.push(`本场已就绪 ${(event.completed_bytes / (gb ? 1024 ** 3 : 1024 ** 2)).toFixed(1)} ${gb ? 'GB' : 'MB'}`);
+      }
+      if (metrics) metrics.textContent = values.join(' · ');
+      Ptu.renderTimings(event.timings_seconds);
+      const miniDetail = Ptu.$('task-mini-expand');
+      const miniCount = Ptu.$('task-mini-count');
+      if (miniDetail) miniDetail.textContent = event.detail || '查看任务进度';
+      if (miniCount) miniCount.textContent = count?.textContent || '';
+      const miniTrack = Ptu.$('task-mini-track');
+      if (miniTrack) {
+        miniTrack.classList.toggle('is-indeterminate', event.total == null);
+        const fill = miniTrack.querySelector('span');
+        if (fill && event.total != null) fill.style.width = `${event.total > 0 ? Math.max(0, Math.min(100, event.current / event.total * 100)) : 0}%`;
+      }
+      Ptu.updateTaskMini();
       if (track) {
         const indeterminate = event.total == null;
         track.classList.toggle('is-indeterminate', indeterminate);
@@ -68,11 +133,21 @@ export function init(ctx = Ptu) {
       const searchButton = Ptu.$('btn-search-blogger');
       if (backupButton) backupButton.disabled = disabled || Ptu.State.backupFolderBusy;
       if (startButton) startButton.disabled = disabled;
-      if (searchButton) searchButton.disabled = disabled || Ptu.State.backupFolderBusy;
+      if (searchButton) searchButton.disabled = disabled || Ptu.State.backupFolderBusy || Ptu.State.bloggerSearchBusy;
+      for (const id of ['btn-qrcode','btn-self-login','btn-self-settings','btn-target-settings','btn-target-backfill-open','drawer-primary','drawer-backfill-start','btn-logout','btn-archive-preview','btn-backfill-start','btn-target-backfill-start','btn-start-other-backup','btn-pick-target-folder','btn-supertopic-supplement','btn-target-regenerate']) {
+        const button = Ptu.$(id);
+        if (button) button.disabled = disabled;
+      }
+      document.querySelectorAll('[data-library-update]').forEach(button => { button.disabled = disabled || button.dataset.unavailable === 'true'; });
+      Ptu.updateTaskMini();
     },
 
     setActiveTask(taskId) {
       Ptu.State.taskId = taskId;
+      const detail = Ptu.$('progress-stage-detail');
+      if (detail) detail.textContent = '正在准备任务';
+      const count = Ptu.$('progress-stage-count');
+      if (count) count.textContent = '正在统计任务内容';
       Ptu.updateTaskActionAvailability();
     },
 
@@ -299,7 +374,7 @@ export function init(ctx = Ptu) {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       const url = `${proto}://${location.host}/ws/tasks/${taskId}`;
       const ws = new WsClient(url);
-      ws.on((msg) => Ptu.handleTaskMessage(msg));
+      ws.on((msg) => { if (Ptu.State.taskId === taskId) Ptu.handleTaskMessage(msg); });
       ws.connect();
       Ptu.State.ws = ws;
     },
@@ -307,6 +382,11 @@ export function init(ctx = Ptu) {
     handleTaskMessage(msg) {
       switch (msg.type) {
         case 'snapshot':
+          if (msg.output_dir) Ptu.State._backupOutputDir = msg.output_dir;
+          if (['done','error','cancelled','waiting_resume','abandoned'].includes(msg.state)) {
+            Ptu.handleTaskMessage({...msg, type:msg.state});
+            break;
+          }
           Ptu.setProgress(msg.progress_pct || 0, msg.progress_msg || '已订阅');
           if (msg.progress_event) Ptu.renderProgressEvent(msg.progress_event);
           if (msg.pacing_mode) Ptu.renderPacingStatus(msg);
@@ -331,15 +411,31 @@ export function init(ctx = Ptu) {
           Ptu.clearActiveTask();
           Ptu._closeTaskWs();
           Ptu.hidePacingStatus();
+          Ptu.maybeNotifyTaskDone(msg.result && msg.result.task_kind === 'following_archive'
+            ? '关注资料更新完成' : '微博书生成完成');
+          if (Ptu.refreshArchiveAfterTask) Ptu.refreshArchiveAfterTask(msg.result || {});
+          if (Ptu.refreshSelfArchiveStatus) Ptu.refreshSelfArchiveStatus();
+          if (Ptu.refreshHistoryList) Ptu.refreshHistoryList();
           break;
         case 'error':
           Ptu.setProgress(0, '失败：' + (msg.error || '未知错误'));
           Ptu.toast('任务失败，详见日志');
+          Ptu.maybeNotifyTaskDone('任务失败：' + (msg.error || '未知错误'));
           Ptu.setTaskCancelVisible(false);
           Ptu.clearActiveTask();
           Ptu._closeTaskWs();
           Ptu.hidePacingStatus();
+          Ptu.checkRecoveryTask();
           break;
+        case 'waiting_resume':
+          Ptu.setProgress(msg.progress_pct || 0, '任务已暂停，已保存完成的内容');
+          Ptu.setTaskCancelVisible(false);
+          Ptu.clearActiveTask();
+          Ptu._closeTaskWs();
+          Ptu.hidePacingStatus();
+          Ptu.checkRecoveryTask();
+          break;
+        case 'abandoned':
         case 'cancelled':
           Ptu.setProgress(0, '任务已取消');
           Ptu.toast('任务已取消');
@@ -406,13 +502,23 @@ export function init(ctx = Ptu) {
       const ul = Ptu.$('result-list');
       ul.innerHTML = '';
       const add = (label, path) => {
-        if (!path) return;
+        if (!path) return null;
         const li = document.createElement('li');
         li.innerHTML = `<strong>${label}：</strong> ${Ptu.escape(path)}`;
         ul.appendChild(li);
+        return li;
       };
       const outputDir = result.output_dir || Ptu.State._backupOutputDir;
       add('输出目录', outputDir);
+      const sizeRow = outputDir && result.task_kind !== 'following_archive' && typeof Ptu.Api.librarySizes === 'function'
+        ? add('档案占用', '计算中…') : null;
+      if (sizeRow) {
+        Ptu.Api.librarySizes(outputDir).then(r => {
+          const value = (r.sizes || [])[0]?.size_bytes;
+          if (sizeRow.isConnected && Number.isFinite(value)) sizeRow.innerHTML = `<strong>档案占用：</strong> ${Ptu.escape(Ptu.formatSize(value))}`;
+          else if (sizeRow.isConnected) sizeRow.remove();
+        }).catch(() => { if (sizeRow.isConnected) sizeRow.remove(); });
+      }
       if (result.task_kind === 'following_archive') {
         add('关注博主', `${result.blogger_count || 0} 个`);
         add('关注超话', `${result.supertopic_count || 0} 个`);
@@ -433,6 +539,14 @@ export function init(ctx = Ptu) {
       add('PDF', result.pdf);
       add('HTML', result.html);
       add('报告', result.report);
+      if (Number.isFinite(result.elapsed_seconds)) add('本次运行耗时', Ptu.formatDuration(result.elapsed_seconds));
+      if (result.timings_seconds) Ptu.renderTimings(result.timings_seconds);
+      if (result.supertopic?.status === 'unavailable') {
+        add('超话检查', result.supertopic.message);
+      } else if (result.supertopic) {
+        add('超话检查', `${result.supertopic.pages} 页 · 发现 ${result.supertopic.found} 条 · 重复 ${result.supertopic.duplicate} 条`);
+        add('超话补入', `${result.supertopic.new} 条`);
+      }
       add('档案总数', `${result.total_posts || 0} 条`);
       add('本次新增', `${result.new_posts || 0} 条`);
       add('已刷新', `${result.refreshed_posts || 0} 条`);
@@ -442,12 +556,19 @@ export function init(ctx = Ptu) {
       Ptu.State._lastResult = { ...result, output_dir: outputDir };
     },
 
+    async maybeNotifyTaskDone(message) {
+      if (typeof Ptu.settingsFlag !== 'function' || !Ptu.settingsFlag('weishushu.notifyOnTaskDone', false)) return;
+      if (typeof Ptu.Api.notify !== 'function') return;
+      try { await Ptu.Api.notify('微书薯', message); } catch (e) { /* 通知失败不影响任务结果 */ }
+    },
+
     async openOutputFolder() {
       const r = Ptu.State._lastResult;
       if (!r || !r.output_dir) { Ptu.toast('还没有结果'); return; }
       if (Ptu.State.isDesktop) {
         try {
-          await global.pywebview.api.open_folder(r.output_dir);
+          const opened = await global.pywebview.api.open_folder(r.output_dir);
+          if (!opened) Ptu.toast('无法打开输出文件夹，请检查目录是否仍然存在。');
         } catch (e) { Ptu.toast('打开失败：' + e.message); }
       } else {
         Ptu.toast('浏览器模式下请手动打开：' + r.output_dir);

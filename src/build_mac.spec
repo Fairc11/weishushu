@@ -160,11 +160,11 @@ app = BUNDLE(
     info_plist={
         "CFBundleName": BUNDLE_NAME,
         "CFBundleDisplayName": BUNDLE_DISPLAY_NAME,
-        "CFBundleShortVersionString": "2.0.1",
-        "CFBundleVersion": "2.0.1",
+        "CFBundleShortVersionString": "2.2.0",
+        "CFBundleVersion": "2.2.0",
         "CFBundleDevelopmentRegion": "zh-Hans",
         "CFBundleLocalizations": ["zh-Hans"],
-        "LSMinimumSystemVersion": "12.0",
+        "LSMinimumSystemVersion": "26.0",
         "NSHighResolutionCapable": True,
     },
 )

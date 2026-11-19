@@ -16,7 +16,7 @@ from backend.app.services.qrcode_login import (
     QRCodeLoginService,
     _cookie_fingerprint,
 )
-from weibo_book.errors import OperationCancelled, WeiboError
+from weibo_book.errors import OperationCancelled, WeiboError, WeiboErrorKind
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"qrcode"
@@ -244,6 +244,155 @@ def test_playwright_worker_uses_verified_node_and_closes_all_resources() -> None
         args=["--disable-blink-features=AutomationControlled"],
     )
     landing.close.assert_called_once_with()
+    login_page.close.assert_called_once_with()
+    context.close.assert_called_once_with()
+    browser.close.assert_called_once_with()
+
+
+def test_playwright_worker_validates_cookies_when_login_popup_closes_itself() -> None:
+    """扫码确认成功后微博会自行关闭授权弹窗：页面关闭即登录信号，
+    必须立刻取 Cookie 交服务端校验，而不是报 TargetClosedError。"""
+    from playwright.sync_api import Error as PlaywrightError
+
+    service = QRCodeLoginService()
+    session = service.reserve()
+    control = QRCodeLoginControl(session, time.monotonic)
+
+    qrcode = MagicMock()
+    qrcode.count.return_value = 1
+    qrcode.bounding_box.return_value = {"width": 140, "height": 140}
+    qrcode.screenshot.return_value = PNG
+    heading = MagicMock()
+    heading.count.return_value = 1
+
+    login_page = MagicMock()
+    login_page.locator.return_value = qrcode
+    login_page.get_by_text.return_value = heading
+    login_page.url = "https://passport.weibo.com/sso/signin"
+    # 第一次是出码后的稳定等待；第二次（轮询循环内）模拟微博
+    # 在扫码成功后自行关闭授权弹窗。
+    login_page.wait_for_timeout.side_effect = [
+        None,
+        PlaywrightError("Target page, context or browser has been closed"),
+    ]
+    landing = MagicMock()
+    trigger = MagicMock()
+    trigger.count.return_value = 1
+    landing.get_by_role.return_value = trigger
+
+    popup = MagicMock()
+    popup.__enter__.return_value.value = login_page
+    context = MagicMock()
+    context.new_page.return_value = landing
+    context.expect_page.return_value = popup
+    context.cookies.return_value = COOKIES
+    browser = MagicMock()
+    browser.new_context.return_value = context
+    playwright = MagicMock()
+    playwright.chromium.launch.return_value = browser
+    manager = MagicMock()
+    manager.__enter__.return_value = playwright
+    manager.__exit__.return_value = False
+
+    with patch("playwright.sync_api.sync_playwright", return_value=manager):
+        events = service._playwright_events(control)
+        assert next(events) == QRCodeLoginEvent.qrcode(PNG)
+        assert next(events) == QRCodeLoginEvent.cookies(COOKIES)
+        with pytest.raises(WeiboError, match="登录页面被意外关闭"):
+            next(events)
+
+    login_page.close.assert_called_once_with()
+    context.close.assert_called_once_with()
+    browser.close.assert_called_once_with()
+
+
+def _mock_playwright_stack(login_page, landing):
+    trigger = MagicMock()
+    trigger.count.return_value = 1
+    landing.get_by_role.return_value = trigger
+    popup = MagicMock()
+    popup.__enter__.return_value.value = login_page
+    context = MagicMock()
+    context.new_page.return_value = landing
+    context.expect_page.return_value = popup
+    browser = MagicMock()
+    browser.new_context.return_value = context
+    playwright = MagicMock()
+    playwright.chromium.launch.return_value = browser
+    manager = MagicMock()
+    manager.__enter__.return_value = playwright
+    manager.__exit__.return_value = False
+    return manager, context, browser
+
+
+def _mock_qrcode_nodes():
+    qrcode = MagicMock()
+    qrcode.count.return_value = 1
+    qrcode.bounding_box.return_value = {"width": 140, "height": 140}
+    qrcode.screenshot.return_value = PNG
+    heading = MagicMock()
+    heading.count.return_value = 1
+    return qrcode, heading
+
+
+def test_playwright_worker_reloads_when_qrcode_image_data_missing() -> None:
+    """二维码节点可见但图片数据未加载（限流形态）：刷新一次后能出码。"""
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    service = QRCodeLoginService()
+    session = service.reserve()
+    control = QRCodeLoginControl(session, time.monotonic)
+
+    qrcode, heading = _mock_qrcode_nodes()
+    login_page = MagicMock()
+    login_page.locator.return_value = qrcode
+    login_page.get_by_text.return_value = heading
+    login_page.wait_for_function.side_effect = [
+        PlaywrightTimeoutError("Timeout 10000ms exceeded"),
+        None,
+    ]
+    landing = MagicMock()
+    landing.url = "https://weibo.com/newlogin"
+    manager, _context, _browser = _mock_playwright_stack(login_page, landing)
+
+    with patch("playwright.sync_api.sync_playwright", return_value=manager):
+        events = service._playwright_events(control)
+        first = next(events)
+        session.cancel_event.set()
+        assert list(events) == []
+
+    assert first == QRCodeLoginEvent.qrcode(PNG)
+    login_page.reload.assert_called_once_with(
+        wait_until="domcontentloaded",
+        timeout=30000,
+    )
+
+
+def test_playwright_worker_fails_instead_of_serving_broken_qrcode() -> None:
+    """刷新后图片数据仍加载失败：报网络错误，绝不把裂图截给用户。"""
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    service = QRCodeLoginService()
+    session = service.reserve()
+    control = QRCodeLoginControl(session, time.monotonic)
+
+    qrcode, heading = _mock_qrcode_nodes()
+    login_page = MagicMock()
+    login_page.locator.return_value = qrcode
+    login_page.get_by_text.return_value = heading
+    login_page.wait_for_function.side_effect = PlaywrightTimeoutError(
+        "Timeout 10000ms exceeded"
+    )
+    landing = MagicMock()
+    manager, context, browser = _mock_playwright_stack(login_page, landing)
+
+    with patch("playwright.sync_api.sync_playwright", return_value=manager):
+        events = service._playwright_events(control)
+        with pytest.raises(WeiboError, match="二维码图片加载失败") as exc_info:
+            next(events)
+
+    assert exc_info.value.kind is WeiboErrorKind.NETWORK
+    qrcode.screenshot.assert_not_called()
     login_page.close.assert_called_once_with()
     context.close.assert_called_once_with()
     browser.close.assert_called_once_with()

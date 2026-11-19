@@ -28,6 +28,28 @@ PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PRIMARY_LOGIN_URL = "https://weibo.com/login"
 FALLBACK_LOGIN_URL = "https://passport.weibo.cn/signin/login"
 QRCODE_SELECTOR = 'img[src^="https://v2.qr.weibo.cn/"]'
+
+
+def _wait_qrcode_image_loaded(page, timeout_ms: int = 10000) -> bool:
+    """等二维码图片数据真正加载完成。
+
+    节点可见不代表图片可用：v2.qr.weibo.cn 被限流时 img 节点照常布局，
+    直接截图只会得到浏览器的裂图占位。
+    """
+    from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    try:
+        page.wait_for_function(
+            "() => {"
+            " const img = document.querySelector('img[src^=\"https://v2.qr.weibo.cn/\"]');"
+            " return !!(img && img.complete && img.naturalWidth >= 100);"
+            " }",
+            timeout=timeout_ms,
+        )
+    except (PlaywrightTimeoutError, PlaywrightError):
+        return False
+    return True
 QRCODE_HEADING = "扫描二维码登录"
 
 ACTIVE_STATES = frozenset({"preparing", "waiting_scan", "validating"})
@@ -354,6 +376,7 @@ class QRCodeLoginService:
     def _playwright_events(
         control: QRCodeLoginControl,
     ) -> Iterator[QRCodeLoginEvent]:
+        from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
 
@@ -383,15 +406,18 @@ class QRCodeLoginService:
                     timeout=30000,
                 )
                 control.raise_if_cancelled()
-                landing.wait_for_timeout(8000)
-                control.raise_if_cancelled()
-
-                login_page = landing
                 trigger = landing.get_by_role(
                     "button",
                     name="登录/注册",
                     exact=True,
                 )
+                try:
+                    trigger.first.wait_for(state="visible", timeout=15000)
+                except PlaywrightTimeoutError:
+                    pass  # 按钮未出现：走下面的回退登录地址
+                control.raise_if_cancelled()
+
+                login_page = landing
                 if trigger.count() == 1:
                     try:
                         with context.expect_page(timeout=10000) as popup_info:
@@ -426,6 +452,25 @@ class QRCodeLoginService:
                     timeout=15000,
                 )
                 control.raise_if_cancelled()
+                if not _wait_qrcode_image_loaded(login_page):
+                    # 图片数据没下来（限流/慢网络）：刷新一次重试，
+                    # 仍然不行就报错，绝不把裂图占位截给用户。
+                    login_page.reload(
+                        wait_until="domcontentloaded",
+                        timeout=30000,
+                    )
+                    control.raise_if_cancelled()
+                    login_page.wait_for_selector(
+                        QRCODE_SELECTOR,
+                        state="visible",
+                        timeout=15000,
+                    )
+                    control.raise_if_cancelled()
+                    if not _wait_qrcode_image_loaded(login_page):
+                        raise WeiboError(
+                            "二维码图片加载失败，请检查网络后重新获取",
+                            kind=WeiboErrorKind.NETWORK,
+                        )
                 login_page.wait_for_timeout(1000)
                 control.raise_if_cancelled()
 
@@ -455,32 +500,50 @@ class QRCodeLoginService:
                 last_validation_at = 0.0
                 yield QRCodeLoginEvent.qrcode(qrcode.screenshot(type="png"))
 
-                while (
-                    not control.cancel_requested()
-                    and control.remaining_seconds() > 0
-                ):
-                    # 每轮同时复核已取证的登录提示与二维码节点；
-                    # 节点变化不能单独代表登录成功，最终仍只信服务端校验。
-                    login_prompt_visible = (
-                        heading.count() == 1 and qrcode.count() == 1
-                    )
-                    cookies = context.cookies()
-                    cookie_changed = (
-                        _cookie_fingerprint(cookies) != baseline_fingerprint
-                    )
-                    login_hint = (
-                        login_page.url != login_url or not login_prompt_visible
-                    )
-                    now = time.monotonic()
-                    if (
-                        (cookie_changed or login_hint)
-                        and now - last_validation_at >= 3
+                try:
+                    while (
+                        not control.cancel_requested()
+                        and control.remaining_seconds() > 0
                     ):
-                        last_validation_at = now
-                        yield QRCodeLoginEvent.cookies(cookies)
-                    login_page.wait_for_timeout(1000)
-                    control.raise_if_cancelled()
-                    yield QRCodeLoginEvent.tick()
+                        # 每轮同时复核已取证的登录提示与二维码节点；
+                        # 节点变化不能单独代表登录成功，最终仍只信服务端校验。
+                        login_prompt_visible = (
+                            heading.count() == 1 and qrcode.count() == 1
+                        )
+                        cookies = context.cookies()
+                        cookie_changed = (
+                            _cookie_fingerprint(cookies) != baseline_fingerprint
+                        )
+                        login_hint = (
+                            login_page.url != login_url or not login_prompt_visible
+                        )
+                        now = time.monotonic()
+                        if (
+                            (cookie_changed or login_hint)
+                            and now - last_validation_at >= 3
+                        ):
+                            last_validation_at = now
+                            yield QRCodeLoginEvent.cookies(cookies)
+                        login_page.wait_for_timeout(1000)
+                        control.raise_if_cancelled()
+                        yield QRCodeLoginEvent.tick()
+                except PlaywrightError:
+                    # 扫码确认成功后微博会自行关闭授权弹窗（disp=popup 允许
+                    # 脚本 window.close），轮询可能来不及读到 Cookie；页面关闭
+                    # 本身就是登录信号，立刻从 context 取 Cookie 交服务端校验。
+                    logger.info("二维码授权页面已关闭，直接校验当前 Cookie")
+                    try:
+                        closed_cookies = context.cookies()
+                    except PlaywrightError:
+                        raise WeiboError(
+                            "登录页面被意外关闭，请重新获取二维码",
+                            kind=WeiboErrorKind.AUTH,
+                        ) from None
+                    yield QRCodeLoginEvent.cookies(closed_cookies)
+                    raise WeiboError(
+                        "登录页面被意外关闭，请重新获取二维码",
+                        kind=WeiboErrorKind.AUTH,
+                    ) from None
             finally:
                 for page in reversed(pages):
                     try:

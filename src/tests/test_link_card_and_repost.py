@@ -88,7 +88,8 @@ def test_retweeted_status_keeps_exact_author_and_nested_card():
     assert converted.retweeted.user_avatar == "https://wx1.sinaimg.cn/avatar.jpg"
     assert converted.retweeted.verified is True
     assert converted.retweeted.gender == "f"
-    assert converted.retweeted.link_card.title == "#话题#"
+    # 话题页卡片（search_topic，方形图 + N讨论N阅读）不作为引用卡片保留
+    assert converted.retweeted.link_card is None
 
 
 def test_html_renders_link_card_and_full_retweet_content():

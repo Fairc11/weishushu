@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from backend.app.main import app
 
 
-def _fake_marker_path(tmp: Path, name: str = "first_run_v2.0.1.json") -> Path:
+def _fake_marker_path(tmp: Path, name: str = "first_run_v2.2.0.json") -> Path:
     return tmp / name
 
 
@@ -89,10 +89,10 @@ class FirstRunAcceptTests(unittest.TestCase):
                 # 标记文件应存在
                 self.assertTrue(target.exists(), f"标记文件未创建: {target}")
 
-                # 标记文件内容应合法（含 schema_version=1, version=2.0.1, accepted_at）
+                # 标记文件内容应合法（含 schema_version=1, version=2.2.0, accepted_at）
                 data = json.loads(target.read_text(encoding="utf-8"))
                 self.assertEqual(data["schema_version"], 1)
-                self.assertEqual(data["version"], "2.0.1")
+                self.assertEqual(data["version"], "2.2.0")
                 self.assertIn("accepted_at", data)
                 self.assertIsInstance(data["accepted_at"], (int, float))
 

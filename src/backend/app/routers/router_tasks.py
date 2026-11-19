@@ -76,14 +76,36 @@ async def resume_task(task_id: str) -> PersonalArchiveTaskActionResponse:
     return PersonalArchiveTaskActionResponse(task_id=task_id, state="running")
 
 
+def _persistent_identity(task_id: str) -> dict[str, str]:
+    """登录态失效时的放弃兜底身份：以持久任务记录的目标账号为准。
+
+    放弃只清理本地文件，不访问微博接口，不需要实时 whoami；
+    否则 Cookie 过期会让"放弃"永远 401，僵尸任务再也清不掉。
+    """
+    record = task_manager.get(task_id)
+    persistent = record.persistent_record if record is not None else None
+    uid = getattr(persistent, "expected_uid", None)
+    if not isinstance(uid, str) or not uid.strip():
+        raise HTTPException(
+            status_code=409,
+            detail="持久任务缺少可信账号标识，请先登录后再放弃",
+        )
+    label = getattr(persistent, "target_label", None)
+    screen_name = label if isinstance(label, str) and label.strip() else uid
+    return {"uid": uid, "screen_name": screen_name}
+
+
 @router.post("/{task_id}/abandon", response_model=PersonalArchiveTaskActionResponse)
 async def abandon_task(task_id: str) -> PersonalArchiveTaskActionResponse:
     snapshot = _require_task(task_id)
     try:
-        abandoned = await _service(snapshot).abandon(
-            task_id,
-            _current_identity(),
-        )
+        identity = _current_identity()
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise
+        identity = _persistent_identity(task_id)
+    try:
+        abandoned = await _service(snapshot).abandon(task_id, identity)
     except WeiboError as exc:
         status = 401 if exc.kind == WeiboErrorKind.AUTH else 409
         raise HTTPException(status_code=status, detail=str(exc)) from exc

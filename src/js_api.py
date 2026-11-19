@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -163,7 +164,7 @@ class JsApi:
             return VERSION
         except Exception:
             # B06 v1.2.0: 与 backend/app/version.py VERSION 保持一致（兜底）
-            return "2.0.1"
+            return "2.2.0"
 
     def get_platform(self) -> str:
         return sys.platform
@@ -218,6 +219,55 @@ class JsApi:
 
     def show_in_folder(self, path: str) -> bool:
         return self.open_folder(path)
+
+    def set_native_appearance(self, theme: str) -> bool:
+        """v2.2.0：让 macOS 原生玻璃跟随 App 内浅色 / 深色主题。"""
+        if self._window is None:
+            return False
+        from desktop.native_glass import set_window_appearance
+        return set_window_appearance(self._window, theme)
+
+    def open_release_page(self) -> bool:
+        """v2.2.0 更新弹窗：用系统浏览器打开固定的微书薯 GitHub 发布页（不接受任意网址）。"""
+        try:
+            import webbrowser
+
+            from backend.app.services.update_check import RELEASES_PAGE
+            return bool(webbrowser.open(RELEASES_PAGE))
+        except Exception as e:
+            logger.exception("open_release_page 失败: %s", e)
+            return False
+
+    def open_book(self, archive_dir: str) -> bool:
+        """v2.2.0 书库“阅读”：用系统默认浏览器打开档案根目录下的 微博书.html。
+
+        只接受档案目录，固定打开其中名为 微博书.html 的普通文件；
+        不跟随符号链接，也不打开任何其他文件。
+        """
+        try:
+            book = Path(archive_dir) / "微博书.html"
+            if book.is_symlink() or not book.is_file():
+                return False
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(book)])
+            elif sys.platform == "win32":
+                os.startfile(str(book))  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["xdg-open", str(book)])
+            return True
+        except Exception as e:
+            logger.exception("open_book 失败: %s", e)
+            return False
+
+    def open_data_dir(self) -> bool:
+        """v2.1.0 设置面板：打开当前 profile 的应用数据目录。"""
+        try:
+            from backend.app.platform_paths import platform_paths
+            _open_in_explorer(str(platform_paths().local_app_data_dir()))
+            return True
+        except Exception as e:
+            logger.exception("open_data_dir 失败: %s", e)
+            return False
 
     # ====== v1.1.5 一键备份：选目录 ======
     def select_folder(self, default_path: str = "") -> Optional[str]:

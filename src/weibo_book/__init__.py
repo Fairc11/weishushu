@@ -25,7 +25,7 @@ if sys.stdout is not None:
     except (AttributeError, ValueError):
         pass
 
-__version__ = "2.0.1"
+__version__ = "2.2.0"
 
 from .api import WeiboBook
 from .models import Post, Comment, PostMedia, UserInfo, MediaType, CommentType, BookConfig

@@ -7,6 +7,7 @@ from pathlib import PureWindowsPath
 import shutil
 import subprocess
 import sys
+from urllib.parse import quote
 
 import pytest
 from jinja2 import DictLoader
@@ -21,9 +22,12 @@ _LOCAL_PNG = bytes.fromhex(
     "0000000d49444154789c63606060f80f0001040100b51c0c020000000049454e44ae426082"
 )
 
+# 根布局 v2 的 browser_url 前缀（与 render_snapshot._browser_url 的编码规则一致）
+_ASSETS_URL_PREFIX = quote("数据与媒体") + "/"
+
 
 def _write_local_png(root: Path, relative_path: str) -> None:
-    path = root / relative_path
+    path = root / "数据与媒体" / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_LOCAL_PNG)
 
@@ -33,7 +37,7 @@ def _write_large_local_png(
 ) -> None:
     from PIL import Image
 
-    path = root / relative_path
+    path = root / "数据与媒体" / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (1200, 1600), color).save(path, "PNG")
 
@@ -47,7 +51,7 @@ def _add_live_photo_pair(
     video_path: str,
 ) -> None:
     _write_local_png(root, image_path)
-    video = root / video_path
+    video = root / "数据与媒体" / video_path
     video.parent.mkdir(parents=True, exist_ok=True)
     video.write_bytes(b"local-live-photo-video")
     repo.upsert_media(
@@ -106,12 +110,12 @@ def test_repository_render_reads_are_exact_and_do_not_change_database(tmp_path):
     repo.upsert_post(_post("A", "2026-07-14T01:00:00+00:00"))
     repo.replace_current_comments("A", [CommentRecord("C", "A", None, {"text": "评论"}, "now")])
     repo.upsert_media(MediaRecord("post", "A", "image", 0, "https://remote.invalid/a", "media/a.jpg"))
-    before = (root / "data" / "archive.db").read_bytes()
+    before = (root / "数据与媒体" / "数据" / "archive.db").read_bytes()
 
     assert [post.bid for post in repo.list_posts_for_render()] == ["A"]
     assert [comment.id for comment in repo.list_comments_for_render()] == ["C"]
     assert [media.local_path for media in repo.list_media_for_render()] == ["media/a.jpg"]
-    assert (root / "data" / "archive.db").read_bytes() == before
+    assert (root / "数据与媒体" / "数据" / "archive.db").read_bytes() == before
 
 
 def test_snapshot_sorts_pins_then_newest_and_keeps_unavailable_text(tmp_path):
@@ -138,6 +142,35 @@ def test_snapshot_sorts_pins_then_newest_and_keeps_unavailable_text(tmp_path):
     assert old["visibility"] == "unavailable"
     with pytest.raises(TypeError, match="只读"):
         old["text"] = "不得修改"
+
+
+def test_snapshot_fans_history_dedupes_unchanged_counts(tmp_path):
+    from weibo_book.archive.render_snapshot import ArchiveRenderSnapshot
+
+    repo, _ = _repo(tmp_path)
+    repo.record_fans_observation("run-1", "2026-07-01T00:00:00+00:00", 1000)
+    repo.record_fans_observation("run-2", "2026-08-01T00:00:00+00:00", 1200)
+    repo.record_fans_observation("run-3", "2026-09-01T00:00:00+00:00", 1200)
+
+    snapshot = ArchiveRenderSnapshot.from_repository(repo)
+
+    assert [dict(item) for item in snapshot.fans_history] == [
+        {"observed_at": "2026-09-01T00:00:00+00:00", "followers_count": 1200},
+        {"observed_at": "2026-07-01T00:00:00+00:00", "followers_count": 1000},
+    ]
+    assert snapshot.user["followers_count"] == 1200
+    assert snapshot.payload()["fans_history"][0]["followers_count"] == 1200
+
+
+def test_snapshot_without_fans_observations_has_empty_history(tmp_path):
+    from weibo_book.archive.render_snapshot import ArchiveRenderSnapshot
+
+    repo, _ = _repo(tmp_path)
+
+    snapshot = ArchiveRenderSnapshot.from_repository(repo)
+
+    assert snapshot.fans_history == ()
+    assert snapshot.user["followers_count"] is None
 
 
 def test_snapshot_projects_readable_times_and_normalized_external_text(tmp_path):
@@ -199,7 +232,8 @@ def test_snapshot_associates_comments_media_live_pairs_and_revisions(tmp_path):
     assert post["media"][0] == {
         "kind": "live_photo", "position": 3,
         "image_path": "media/A_live_04.jpg", "video_path": "media/A_live_04.mov",
-        "image_url": "media/A_live_04.jpg", "video_url": "media/A_live_04.mov",
+        "image_url": _ASSETS_URL_PREFIX + "media/A_live_04.jpg",
+        "video_url": _ASSETS_URL_PREFIX + "media/A_live_04.mov",
     }
     assert post["revisions"][0]["payload"]["text"] == "正文 A"
 
@@ -225,7 +259,7 @@ def test_archive_data_js_is_safe_deterministic_json_not_string_concatenation(tmp
     repo.upsert_post(_post("A", "", text="</script><script>坏\u2028行\u2029尾"))
     ArchiveRenderer(repo).render_all(root, render_pdf=lambda _html, path: path.write_bytes(b"pdf"))
 
-    source = (root / "data" / "archive-data.js").read_text(encoding="utf-8")
+    source = (root / "数据与媒体" / "数据" / "archive-data.js").read_text(encoding="utf-8")
     assert source.startswith("window.__WEISHUSHU_ARCHIVE__ = {")
     assert source.endswith(";\n")
     assert "</script>" not in source
@@ -245,7 +279,7 @@ def test_render_all_creates_fixed_outputs_and_atomic_failure_preserves_old(tmp_p
     paths = renderer.render_all(root, render_pdf=lambda _html, path: path.write_bytes(b"pdf"))
     assert paths == {
         "html": root / "微博书.html", "pdf": root / "微博书.pdf",
-        "markdown": root / "微博书.md", "data": root / "data" / "archive-data.js",
+        "markdown": root / "微博书.md", "data": root / "数据与媒体" / "数据" / "archive-data.js",
     }
     old = (root / "微博书.html").read_bytes()
     monkeypatch.setattr(renderer, "_render_html", lambda _snapshot: (_ for _ in ()).throw(OSError("失败")))
@@ -338,13 +372,35 @@ def test_html_is_file_protocol_offline_mobile_archive_with_required_controls(tmp
         "#post-", "prefers-reduced-motion", "role=\"dialog\"", "aria-modal=\"true\"",
         "preload=\"metadata\"", "data-action=\"zoom-in\"", "data-action=\"zoom-out\"",
         "function renderAllPosts", "selected.forEach", "__WEISHUSHU_PRINT_READY__",
+        'data-view="search"', 'data-action="open-search"', "function normalizeSearchText",
+        "function runSearch", "data-search-input", "data-search-results",
     ):
         assert token in html
-    assert '<script src="data/archive-data.js"></script>' in html
+    assert '<script src="数据与媒体/数据/archive-data.js"></script>' in html
     forbidden = ("fetch(", "XMLHttpRequest", "WebSocket", "http://", "https://", "Cookie")
     assert all(value not in html for value in forbidden)
     assert "addEventListener(\"click\"" not in html or "action-item" not in html
     assert 'data-bid="P00"' not in html  # 微博正文只从安全 JSON 经 DOM API 创建
+
+
+def test_interactive_html_shows_fans_entry_only_with_observations(tmp_path):
+    from weibo_book.archive.render_snapshot import ArchiveRenderer
+
+    repo, root = _repo(tmp_path)
+    repo.upsert_post(_post("A", "2026-07-14T01:00:00+00:00"))
+    ArchiveRenderer(repo).render_all(root, render_pdf=lambda _html, path: path.write_bytes(b"pdf"))
+    html = (root / "微博书.html").read_text(encoding="utf-8")
+    assert 'data-action="open-fans-sheet"' not in html
+
+    repo.record_fans_observation("run-1", "2026-09-01T00:00:00+00:00", 13536000)
+    ArchiveRenderer(repo).render_all(root, render_pdf=lambda _html, path: path.write_bytes(b"pdf"))
+    html = (root / "微博书.html").read_text(encoding="utf-8")
+    data = (root / "数据与媒体" / "数据" / "archive-data.js").read_text(encoding="utf-8")
+
+    assert 'data-action="open-fans-sheet"' in html
+    assert "data-fans-sheet" in html
+    assert "粉丝变迁" in html
+    assert "13536000" in data
 
 
 def test_generator_exposes_interactive_archive_without_changing_public_model_signatures(tmp_path):
@@ -368,7 +424,7 @@ def test_four_file_publish_rolls_back_every_replace_position(
 
     repo, root = _repo(tmp_path)
     repo.upsert_post(_post("NEW", ""))
-    targets = [root / "微博书.html", root / "微博书.pdf", root / "微博书.md", root / "data" / "archive-data.js"]
+    targets = [root / "微博书.html", root / "微博书.pdf", root / "微博书.md", root / "数据与媒体" / "数据" / "archive-data.js"]
     old = {}
     if existing:
         for index, target in enumerate(targets):
@@ -401,7 +457,7 @@ def test_four_file_publish_rolls_back_every_replace_position(
             assert target.read_bytes() == old[target]
         else:
             assert not target.exists()
-    assert not list((root / "data").glob(".render-stage-*"))
+    assert not list((root / "数据与媒体" / "数据").glob(".render-stage-*"))
 
 
 def test_pdf_callback_reads_current_staging_data_not_old_published_data(tmp_path):
@@ -409,7 +465,7 @@ def test_pdf_callback_reads_current_staging_data_not_old_published_data(tmp_path
 
     repo, root = _repo(tmp_path)
     repo.upsert_post(_post("CURRENT", "", text="本次正文"))
-    (root / "data" / "archive-data.js").write_text("OLD-DATA", encoding="utf-8")
+    (root / "数据与媒体" / "数据" / "archive-data.js").write_text("OLD-DATA", encoding="utf-8")
     seen = {}
 
     def inspect_staging(html_path, pdf_path):
@@ -423,7 +479,7 @@ def test_pdf_callback_reads_current_staging_data_not_old_published_data(tmp_path
     assert seen["same_tree"] is True
     assert "<base href=" in seen["html"]
     assert (root.resolve().as_uri() + "/") in seen["html"]
-    assert (root / "data" / "archive-data.js").resolve().as_uri() not in seen["html"]
+    assert (root / "数据与媒体" / "数据" / "archive-data.js").resolve().as_uri() not in seen["html"]
     assert "archive-print-data.js" in seen["html"]
     assert "本次正文" in seen["data"]
     assert "OLD-DATA" not in seen["data"]
@@ -463,7 +519,7 @@ def test_payload_projection_drops_unknown_credentials_at_every_level(tmp_path):
     repo.add_post_revision(PostRevisionRecord("A", 1, "now", {"text": "旧正文", **secret}, "hash"))
     ArchiveRenderer(repo).render_all(root, render_pdf=lambda _html, pdf: pdf.write_bytes(b"pdf"))
 
-    combined = (root / "微博书.html").read_text(encoding="utf-8") + (root / "data" / "archive-data.js").read_text(encoding="utf-8")
+    combined = (root / "微博书.html").read_text(encoding="utf-8") + (root / "数据与媒体" / "数据" / "archive-data.js").read_text(encoding="utf-8")
     for forbidden in ("cookie", "authorization", "bearer", "subp", "secret", "credential-value"):
         assert forbidden not in combined.lower()
     assert "引用正文" in combined and "旧正文" in combined
@@ -480,8 +536,8 @@ def test_incomplete_live_photo_degrades_without_empty_live_paths(tmp_path):
     media = ArchiveRenderSnapshot.from_repository(repo).posts[0]["media"]
 
     assert media == (
-        {"kind": "video", "position": 0, "local_path": "media/only.mov", "browser_url": "media/only.mov", "cover_path": "", "cover_url": ""},
-        {"kind": "image", "position": 1, "local_path": "media/only.jpg", "browser_url": "media/only.jpg"},
+        {"kind": "video", "position": 0, "local_path": "media/only.mov", "browser_url": _ASSETS_URL_PREFIX + "media/only.mov", "cover_path": "", "cover_url": ""},
+        {"kind": "image", "position": 1, "local_path": "media/only.jpg", "browser_url": _ASSETS_URL_PREFIX + "media/only.jpg"},
     )
     assert all(item["kind"] != "live_photo" for item in media)
 
@@ -505,7 +561,7 @@ def test_print_html_uses_escaped_file_uris_without_copying_media(tmp_path):
     root = tmp_path / "含 空格" / "归档"
     repo = ArchiveRepository.create(root, "10001", "固定名字")
     repo.upsert_post(_post("A", ""))
-    media = root / "media" / "one.png"
+    media = root / "数据与媒体" / "media" / "one.png"
     media.parent.mkdir()
     media.write_bytes(
         bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63606060f80f0001040100b51c0c020000000049454e44ae426082")
@@ -524,7 +580,7 @@ def test_print_html_uses_escaped_file_uris_without_copying_media(tmp_path):
 
     assert seen == {"base": True, "data_uri": True, "media_not_copied": True}
     assert "file:" not in (root / "微博书.html").read_text(encoding="utf-8")
-    assert "file:" not in (root / "data" / "archive-data.js").read_text(encoding="utf-8")
+    assert "file:" not in (root / "数据与媒体" / "数据" / "archive-data.js").read_text(encoding="utf-8")
 
 
 def test_windows_file_uri_encodes_spaces_and_chinese_without_guessing():
@@ -568,7 +624,7 @@ def test_forward_and_link_cards_project_only_local_media_for_shared_renderer(tmp
         },
     ))
     ArchiveRenderer(repo).render_all(root, render_pdf=lambda _html, pdf: pdf.write_bytes(b"pdf"))
-    data = (root / "data" / "archive-data.js").read_text(encoding="utf-8")
+    data = (root / "数据与媒体" / "数据" / "archive-data.js").read_text(encoding="utf-8")
     html = (root / "微博书.html").read_text(encoding="utf-8")
 
     for value in (
@@ -594,13 +650,13 @@ def test_real_playwright_prints_all_twenty_one_posts_and_loads_local_png(tmp_pat
     repo, root = _repo(tmp_path)
     for index in range(21):
         repo.upsert_post(_post(f"P{index:02d}", f"2026-07-14T{index:02d}:00:00+00:00"))
-    image = root / "media" / "one.png"
+    image = root / "数据与媒体" / "media" / "one.png"
     image.parent.mkdir()
     image.write_bytes(
         bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63606060f80f0001040100b51c0c020000000049454e44ae426082")
     )
     repo.upsert_media(MediaRecord("post", "P00", "image", 0, "remote", "media/one.png"))
-    encoded = root / "media" / "%2e%2e.png"
+    encoded = root / "数据与媒体" / "media" / "%2e%2e.png"
     encoded.write_bytes(image.read_bytes())
     repo.upsert_media(MediaRecord("post", "P01", "image", 0, "remote", "media/%2e%2e.png"))
     observed = {}
@@ -712,7 +768,7 @@ def test_print_query_renders_only_requested_post_batch(tmp_path):
     from weibo_book.archive.render_snapshot import ArchiveRenderer
 
     repo, root = _repo(tmp_path)
-    media = root / "media" / "one.png"
+    media = root / "数据与媒体" / "media" / "one.png"
     media.parent.mkdir()
     media.write_bytes(
         bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63606060f80f0001040100b51c0c020000000049454e44ae426082")
@@ -753,7 +809,7 @@ def test_print_page_uses_generated_thumbnail_instead_of_original_image(tmp_path)
 
     repo, root = _repo(tmp_path)
     repo.upsert_post(_post("A", ""))
-    original = root / "media" / "large.png"
+    original = root / "数据与媒体" / "media" / "large.png"
     original.parent.mkdir()
     Image.new("RGB", (1200, 900), "orange").save(original)
     repo.upsert_media(
@@ -784,7 +840,7 @@ def test_browser_url_quotes_each_segment_and_literal_encoded_dotdot_stays_local(
 
     repo, root = _repo(tmp_path)
     repo.upsert_post(_post("A", ""))
-    path = root / "media" / "%2e%2e 图.png"
+    path = root / "数据与媒体" / "media" / "%2e%2e 图.png"
     path.parent.mkdir()
     path.write_bytes(b"local")
     repo.upsert_media(MediaRecord("post", "A", "image", 0, "remote", "media/%2e%2e 图.png"))
@@ -792,8 +848,8 @@ def test_browser_url_quotes_each_segment_and_literal_encoded_dotdot_stays_local(
     item = ArchiveRenderSnapshot.from_repository(repo).posts[0]["media"][0]
 
     assert item["local_path"] == "media/%2e%2e 图.png"
-    assert item["browser_url"] == "media/%252e%252e%20%E5%9B%BE.png"
-    assert (root / item["local_path"]).resolve().is_relative_to(root.resolve())
+    assert item["browser_url"] == _ASSETS_URL_PREFIX + "media/%252e%252e%20%E5%9B%BE.png"
+    assert repo.paths.media_file_path(item["local_path"]).resolve().is_relative_to(root.resolve())
 
 
 @pytest.mark.parametrize("replace_position", [1, 2, 3, 4])
@@ -801,7 +857,7 @@ def test_next_render_recovers_after_process_exit_between_replaces(tmp_path, repl
     root = tmp_path / "archive"
     repo = ArchiveRepository.create(root, "10001", "固定名字")
     repo.upsert_post(_post("A", "", text="崩溃后新正文"))
-    targets = [root / "微博书.html", root / "微博书.pdf", root / "微博书.md", root / "data" / "archive-data.js"]
+    targets = [root / "微博书.html", root / "微博书.pdf", root / "微博书.md", root / "数据与媒体" / "数据" / "archive-data.js"]
     for index, target in enumerate(targets):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(f"OLD-{index}".encode())
@@ -813,7 +869,7 @@ import weibo_book.archive.render_snapshot as module
 from weibo_book.archive.repository import ArchiveRepository
 root=Path(os.environ["ARCHIVE_ROOT"]); position=int(os.environ["FAIL_POSITION"])
 repo=ArchiveRepository.open(root,"10001"); real=module.os.replace
-targets={root/"微博书.html",root/"微博书.pdf",root/"微博书.md",root/"data"/"archive-data.js"}; count=0
+targets={root/"微博书.html",root/"微博书.pdf",root/"微博书.md",root/"数据与媒体"/"数据"/"archive-data.js"}; count=0
 def crash(source,destination):
     global count
     result=real(source,destination)
@@ -834,10 +890,10 @@ module.ArchiveRenderer(repo).render_all(root,render_pdf=lambda _html,pdf:pdf.wri
     from weibo_book.archive.render_snapshot import ArchiveRenderer
     ArchiveRenderer(repo).render_all(root, render_pdf=lambda _html, pdf: pdf.write_bytes(b"FINAL-PDF"))
 
-    assert "崩溃后新正文" in (root / "data" / "archive-data.js").read_text(encoding="utf-8")
+    assert "崩溃后新正文" in (root / "数据与媒体" / "数据" / "archive-data.js").read_text(encoding="utf-8")
     assert (root / "微博书.pdf").read_bytes() == b"FINAL-PDF"
-    assert not list((root / "data").glob(".render-stage-*"))
-    assert not (root / "data" / ".weishushu-render-state.json").exists()
+    assert not list((root / "数据与媒体" / "数据").glob(".render-stage-*"))
+    assert not (root / "数据与媒体" / "数据" / ".weishushu-render-state.json").exists()
 
 
 @pytest.mark.parametrize("restore_position", [1, 2, 3, 4])
@@ -847,7 +903,7 @@ def test_next_render_recovers_after_process_exit_during_each_restore(tmp_path, r
     repo.upsert_post(_post("A", "", text="最终正文"))
     for index, target in enumerate((
         root / "微博书.html", root / "微博书.pdf", root / "微博书.md",
-        root / "data" / "archive-data.js",
+        root / "数据与媒体" / "数据" / "archive-data.js",
     )):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(f"OLD-{index}".encode())
@@ -858,7 +914,7 @@ from pathlib import Path
 import weibo_book.archive.render_snapshot as module
 from weibo_book.archive.repository import ArchiveRepository
 root=Path(os.environ["ARCHIVE_ROOT"]); repo=ArchiveRepository.open(root,"10001"); real=module.os.replace
-targets={root/"微博书.html",root/"微博书.pdf",root/"微博书.md",root/"data"/"archive-data.js"}
+targets={root/"微博书.html",root/"微博书.pdf",root/"微博书.md",root/"数据与媒体"/"数据"/"archive-data.js"}
 def crash(source,destination,*args,**kwargs):
     result=real(source,destination,*args,**kwargs)
     if Path(destination) in targets and ".render-stage-" in Path(source).as_posix(): os._exit(73)
@@ -896,10 +952,10 @@ module.ArchiveRenderer(repo).render_all(root,render_pdf=lambda _html,pdf:pdf.wri
     repo = ArchiveRepository.open(root, "10001")
     from weibo_book.archive.render_snapshot import ArchiveRenderer
     ArchiveRenderer(repo).render_all(root, render_pdf=lambda _html, pdf: pdf.write_bytes(b"FINAL-PDF"))
-    assert "最终正文" in (root / "data" / "archive-data.js").read_text(encoding="utf-8")
+    assert "最终正文" in (root / "数据与媒体" / "数据" / "archive-data.js").read_text(encoding="utf-8")
     assert (root / "微博书.pdf").read_bytes() == b"FINAL-PDF"
-    assert not (root / "data" / ".weishushu-render-state.json").exists()
-    assert not list((root / "data").glob(".render-stage-*"))
+    assert not (root / "数据与媒体" / "数据" / ".weishushu-render-state.json").exists()
+    assert not list((root / "数据与媒体" / "数据").glob(".render-stage-*"))
 
 
 def test_data_symlink_is_rejected_without_writing_external_directory(tmp_path):
@@ -907,14 +963,14 @@ def test_data_symlink_is_rejected_without_writing_external_directory(tmp_path):
     repo, root = _repo(tmp_path)
     external = tmp_path / "external"
     external.mkdir()
-    data = root / "data"
-    moved = root / "real-data"
+    data = root / "数据与媒体" / "数据"
+    moved = root / "数据与媒体" / "real-data"
     repo.close()
     data.rename(moved)
     data.symlink_to(external, target_is_directory=True)
 
     from weibo_book.archive.render_snapshot import ArchiveRenderer
-    with pytest.raises(ArchiveError, match="data"):
+    with pytest.raises(ArchiveError, match="数据目录"):
         ArchiveRenderer(repo).render_all(root, render_pdf=lambda _html, pdf: pdf.write_bytes(b"pdf"))
     assert list(external.iterdir()) == []
 
@@ -942,9 +998,9 @@ def test_real_playwright_revision_redraw_and_lightbox_group_do_not_request_remot
     ))
     png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63606060f80f0001040100b51c0c020000000049454e44ae426082")
     for position, name in enumerate(("main-1.png", "main-2.png")):
-        path=root/"media"/name; path.parent.mkdir(exist_ok=True); path.write_bytes(png)
+        path=root/"数据与媒体"/"media"/name; path.parent.mkdir(exist_ok=True); path.write_bytes(png)
         repo.upsert_media(MediaRecord("post","A","image",position,"remote",f"media/{name}"))
-    old=root/"media"/"old.png"; old.write_bytes(png)
+    old=root/"数据与媒体"/"media"/"old.png"; old.write_bytes(png)
     repo.add_post_revision(PostRevisionRecord("A",1,"2026-07-15T00:00:00+00:00",{
         "bid":"A","uid":"10001","text":"历史正文","created_at":"2026-07-13T01:00:00+00:00",
         "source":"历史来源","ip_location":"历史地区","visibility":"unavailable","is_pinned":True,
@@ -977,7 +1033,7 @@ def test_real_playwright_revision_redraw_and_lightbox_group_do_not_request_remot
     assert observed["next"].endswith("media/main-2.png")
     assert all(value in observed["old"] for value in ("历史正文","历史来源","历史地区","置顶","当前不可见"))
     assert observed["old_href"] == "https://example.invalid/old"
-    assert observed["old_image"] == "media/old.png"
+    assert observed["old_image"] == _ASSETS_URL_PREFIX + "media/old.png"
     assert observed["old_group"] == "A:rev-1:main"
     assert observed["old_lightbox"].endswith("media/old.png")
     assert all(value in observed["current"] for value in ("当前正文","当前来源","当前地区"))
@@ -1005,7 +1061,7 @@ def test_feed_lightbox_controls_and_live_photo_render_without_opening_detail(tmp
         "media/feed-live.png",
         "media/feed-live.mov",
     )
-    normal_video = root / "media/feed-video.mp4"
+    normal_video = root / "数据与媒体" / "media/feed-video.mp4"
     normal_video.write_bytes(b"local-normal-video")
     repo.upsert_media(
         MediaRecord("post", "A", "video", 3, "remote-video", "media/feed-video.mp4")
@@ -1083,24 +1139,40 @@ def test_feed_lightbox_controls_and_live_photo_render_without_opening_detail(tmp
         assert grid.locator(":scope > .video-shell").count() == 4
         live_photo = grid.locator("[data-live-photo]")
         live_image = live_photo.locator("img")
-        live_video = live_photo.locator("video")
         normal_video = grid.locator('video[aria-label="微博视频"]')
         assert live_photo.count() == 1
+        assert live_photo.get_attribute("aria-label") == "查看实况照片"
+        assert live_photo.locator("video").count() == 0
         assert live_image.evaluate("image => getComputedStyle(image).display") == "block"
-        assert live_video.evaluate("video => getComputedStyle(video).display") == "none"
         assert normal_video.get_attribute("hidden") is None
         assert normal_video.evaluate("video => getComputedStyle(video).display") == "block"
 
-        _install_valid_webm(live_video)
         live_photo.click()
-        assert live_image.evaluate("image => getComputedStyle(image).display") == "none"
-        assert live_video.evaluate("video => getComputedStyle(video).display") == "block"
-        assert normal_video.evaluate("video => getComputedStyle(video).display") == "block"
-
-        live_photo.click()
-        assert live_image.evaluate("image => getComputedStyle(image).display") == "block"
-        assert live_video.evaluate("video => getComputedStyle(video).display") == "none"
-        assert normal_video.evaluate("video => getComputedStyle(video).display") == "block"
+        assert lightbox.is_visible()
+        assert page.locator("[data-lightbox-image]").get_attribute("src").endswith(
+            "media/feed-live.png"
+        )
+        assert page.locator("[data-lightbox-live-badge]").is_visible()
+        live_toggle = page.locator("[data-live-toggle]")
+        assert live_toggle.is_visible()
+        lightbox_video = page.locator("[data-lightbox-video]")
+        _install_valid_webm(lightbox_video)
+        live_toggle.click()
+        assert lightbox_video.evaluate(
+            "video => getComputedStyle(video).display"
+        ) == "block"
+        assert page.locator("[data-lightbox-image]").evaluate(
+            "image => getComputedStyle(image).display"
+        ) == "none"
+        live_toggle.click()
+        assert lightbox_video.evaluate(
+            "video => getComputedStyle(video).display"
+        ) == "none"
+        assert page.locator("[data-lightbox-image]").evaluate(
+            "image => getComputedStyle(image).display"
+        ) == "block"
+        page.locator('[data-action="lightbox-close"]').click()
+        assert lightbox.is_hidden()
         browser.close()
 
 
@@ -1248,8 +1320,9 @@ def test_valid_live_photo_can_return_to_image_with_reduced_motion(
         page.wait_for_function("window.__WEISHUSHU_PRINT_READY__ === true")
 
         live_photo = page.locator('[data-bid="A"] [data-live-photo]')
-        live_video = live_photo.locator("video")
-        _install_valid_webm(live_video)
+        lightbox = page.locator("[data-media-lightbox]")
+        lightbox_video = page.locator("[data-lightbox-video]")
+        live_toggle = page.locator("[data-live-toggle]")
 
         def activate() -> None:
             if interaction == "mouse":
@@ -1260,20 +1333,23 @@ def test_valid_live_photo_can_return_to_image_with_reduced_motion(
             else:
                 live_photo.dispatch_event("click")
 
-        assert live_photo.get_attribute("aria-label") == "播放实况照片"
-        assert live_photo.get_attribute("aria-pressed") == "false"
+        assert live_photo.get_attribute("aria-label") == "查看实况照片"
         activate()
-        assert live_video.evaluate("video => getComputedStyle(video).display") == "block"
-        assert live_video.evaluate("video => video.paused") is False
-        assert live_photo.get_attribute("aria-label") == "暂停实况照片"
-        assert live_photo.get_attribute("aria-pressed") == "true"
-        activate()
-        assert live_photo.locator("img").evaluate(
+        assert lightbox.is_visible()
+        assert page.locator("[data-lightbox-live-badge]").is_visible()
+        _install_valid_webm(lightbox_video)
+        live_toggle.click()
+        assert lightbox_video.evaluate("video => getComputedStyle(video).display") == "block"
+        assert lightbox_video.evaluate("video => video.paused") is False
+        assert live_toggle.get_attribute("aria-label") == "暂停实况照片"
+        assert live_toggle.get_attribute("aria-pressed") == "true"
+        live_toggle.click()
+        assert page.locator("[data-lightbox-image]").evaluate(
             "image => getComputedStyle(image).display"
         ) == "block"
-        assert live_video.evaluate("video => getComputedStyle(video).display") == "none"
-        assert live_photo.get_attribute("aria-label") == "播放实况照片"
-        assert live_photo.get_attribute("aria-pressed") == "false"
+        assert lightbox_video.evaluate("video => getComputedStyle(video).display") == "none"
+        assert live_toggle.get_attribute("aria-label") == "播放实况照片"
+        assert live_toggle.get_attribute("aria-pressed") == "false"
         browser.close()
 
 
@@ -1299,8 +1375,10 @@ def test_live_photo_play_rejection_rolls_back_without_pageerror(tmp_path):
         page.wait_for_function("window.__WEISHUSHU_PRINT_READY__ === true")
 
         live_photo = page.locator('[data-bid="A"] [data-live-photo]')
-        live_video = live_photo.locator("video")
-        live_video.evaluate(
+        live_photo.click()
+        lightbox_video = page.locator("[data-lightbox-video]")
+        live_toggle = page.locator("[data-live-toggle]")
+        lightbox_video.evaluate(
             """video => {
                 video.play = () => new Promise((_resolve, reject) => {
                     window.__rejectLivePlay = reject;
@@ -1308,16 +1386,16 @@ def test_live_photo_play_rejection_rolls_back_without_pageerror(tmp_path):
                 video.pause = () => { window.__livePauseCount = (window.__livePauseCount || 0) + 1; };
             }"""
         )
-        live_photo.click()
+        live_toggle.click()
         page.evaluate("window.__rejectLivePlay(new DOMException('bad media', 'NotSupportedError'))")
         page.wait_for_function(
-            "document.querySelector('[data-live-photo] video').hidden === true"
+            "document.querySelector('[data-lightbox-video]').hidden === true"
         )
 
-        assert live_photo.locator("img").is_visible()
-        assert live_video.is_hidden()
-        assert live_photo.get_attribute("aria-label") == "播放实况照片"
-        assert live_photo.get_attribute("aria-pressed") == "false"
+        assert page.locator("[data-lightbox-image]").is_visible()
+        assert lightbox_video.is_hidden()
+        assert live_toggle.get_attribute("aria-label") == "播放实况照片"
+        assert live_toggle.get_attribute("aria-pressed") == "false"
         assert page.evaluate("window.__livePauseCount") == 1
         assert page_errors == []
         browser.close()
@@ -1343,8 +1421,10 @@ def test_late_play_rejection_does_not_override_newer_live_photo_state(tmp_path):
         page.wait_for_function("window.__WEISHUSHU_PRINT_READY__ === true")
 
         live_photo = page.locator('[data-bid="A"] [data-live-photo]')
-        live_video = live_photo.locator("video")
-        live_video.evaluate(
+        live_photo.click()
+        lightbox_video = page.locator("[data-lightbox-video]")
+        live_toggle = page.locator("[data-live-toggle]")
+        lightbox_video.evaluate(
             """video => {
                 window.__liveAttempts = [];
                 video.play = () => new Promise((resolve, reject) => {
@@ -1353,18 +1433,18 @@ def test_late_play_rejection_does_not_override_newer_live_photo_state(tmp_path):
                 video.pause = () => {};
             }"""
         )
-        live_photo.click()
-        live_photo.click()
-        live_photo.click()
+        live_toggle.click()
+        live_toggle.click()
+        live_toggle.click()
         page.evaluate(
             "window.__liveAttempts[0].reject(new DOMException('late', 'AbortError'))"
         )
         page.wait_for_timeout(50)
 
-        assert live_video.is_visible()
-        assert live_photo.locator("img").is_hidden()
-        assert live_photo.get_attribute("aria-label") == "暂停实况照片"
-        assert live_photo.get_attribute("aria-pressed") == "true"
+        assert lightbox_video.is_visible()
+        assert page.locator("[data-lightbox-image]").is_hidden()
+        assert live_toggle.get_attribute("aria-label") == "暂停实况照片"
+        assert live_toggle.get_attribute("aria-pressed") == "true"
         page.evaluate("window.__liveAttempts[1].resolve()")
         browser.close()
 
@@ -1394,7 +1474,7 @@ def test_mobile_media_grid_uses_weibo_layout_without_narrow_overflow(
     repo.upsert_post(_post("A", "2026-07-14T01:00:00+00:00"))
     for position in range(image_count):
         relative_path = f"media/grid-{position + 1}.png"
-        image_path = root / relative_path
+        image_path = root / "数据与媒体" / relative_path
         image_path.parent.mkdir(parents=True, exist_ok=True)
         dimensions = (300, 1200) if image_count == 1 else (600, 420)
         Image.new("RGB", dimensions, (240, 126, 88)).save(image_path)
@@ -1464,7 +1544,7 @@ def test_single_horizontal_image_container_matches_media_without_overflow(tmp_pa
 
     repo, root = _repo(tmp_path)
     repo.upsert_post(_post("A", "2026-07-14T01:00:00+00:00"))
-    image_path = root / "media/horizontal.png"
+    image_path = root / "数据与媒体" / "media/horizontal.png"
     image_path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (1200, 300), (90, 150, 190)).save(image_path)
     repo.upsert_media(
@@ -1517,7 +1597,7 @@ def test_single_video_media_kinds_have_stable_local_container_geometry(
     repo, root = _repo(tmp_path)
     repo.upsert_post(_post("A", "2026-07-14T01:00:00+00:00"))
     if single_kind == "video":
-        video_path = root / "media/single-video.mp4"
+        video_path = root / "数据与媒体" / "media/single-video.mp4"
         video_path.parent.mkdir(parents=True, exist_ok=True)
         video_path.write_bytes(b"local-video")
         repo.upsert_media(
@@ -1563,11 +1643,11 @@ def test_single_video_media_kinds_have_stable_local_container_geometry(
         else:
             live_photo = shell.locator("[data-live-photo]")
             assert live_photo.count() == 1
-            _install_valid_webm(live_photo.locator("video"))
+            assert live_photo.locator("video").count() == 0
             live_photo.click()
-            assert live_photo.locator("video").evaluate(
-                "video => getComputedStyle(video).display"
-            ) == "block"
+            assert page.locator("[data-media-lightbox]").is_visible()
+            assert page.locator("[data-lightbox-live-badge]").is_visible()
+            page.keyboard.press("Escape")
         browser.close()
 
 
@@ -1635,7 +1715,8 @@ def test_pinned_mobile_feed_card_has_read_only_actions_and_responsive_width(tmp_
             shell_width = page.locator("[data-app-shell]").evaluate(
                 "shell => shell.getBoundingClientRect().width"
             )
-            assert shell_width <= (900 if width >= 900 else width)
+            # 版式 V4：宽屏（≥1200）三栏占满窗口；900–1199 仍限 900；窄屏不超过视口
+            assert shell_width <= (width if width >= 1200 else 900 if width >= 900 else width)
             feed_width = page.locator(".feed-column").evaluate(
                 "feed => feed.getBoundingClientRect().width"
             )
@@ -1695,11 +1776,11 @@ def test_renderer_uses_only_local_main_retweet_and_comment_avatars(tmp_path):
     for owner_type, owner_id, name in (
         ("user", "10001", "main.png"), ("retweeted_user", "200", "retweet.png"), ("comment", "300", "comment.png")
     ):
-        path = root / "media" / "avatars" / name
+        path = root / "数据与媒体" / "media" / "avatars" / name
         path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b"avatar")
         repo.upsert_media(MediaRecord(owner_type, owner_id, "avatar", 0, "https://remote.invalid/avatar", f"media/avatars/{name}"))
     ArchiveRenderer(repo).render_all(root, render_pdf=lambda _html, pdf: pdf.write_bytes(b"pdf"))
-    data = (root / "data" / "archive-data.js").read_text(encoding="utf-8")
+    data = (root / "数据与媒体" / "数据" / "archive-data.js").read_text(encoding="utf-8")
 
     for path in ("media/avatars/main.png", "media/avatars/retweet.png", "media/avatars/comment.png"):
         assert path in data
@@ -1712,7 +1793,7 @@ def test_rollback_failure_keeps_durable_journal_and_backups(tmp_path, monkeypatc
 
     repo, root = _repo(tmp_path)
     repo.upsert_post(_post("A", ""))
-    for target in (root/"微博书.html",root/"微博书.pdf",root/"微博书.md",root/"data"/"archive-data.js"):
+    for target in (root/"微博书.html",root/"微博书.pdf",root/"微博书.md",root/"数据与媒体"/"数据"/"archive-data.js"):
         target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes(b"old")
     real = module.os.replace; published = 0
     def fail_publish(source, destination, *args, **kwargs):
@@ -1728,8 +1809,8 @@ def test_rollback_failure_keeps_durable_journal_and_backups(tmp_path, monkeypatc
     ))
     with pytest.raises(OSError,match="rollback-failed"):
         ArchiveRenderer(repo).render_all(root,render_pdf=lambda _html,pdf:pdf.write_bytes(b"pdf"))
-    assert (root / "data" / ".weishushu-render-state.json").is_file()
-    stages = list((root / "data").glob(".render-stage-*"))
+    assert (root / "数据与媒体" / "数据" / ".weishushu-render-state.json").is_file()
+    stages = list((root / "数据与媒体" / "数据").glob(".render-stage-*"))
     assert len(stages) == 1
     assert len(list((stages[0] / "backup").iterdir())) == 4
 
@@ -1738,7 +1819,7 @@ def test_real_pdf_uses_local_video_poster_without_waiting_for_invalid_video_meta
     from weibo_book.archive.render_snapshot import ArchiveRenderer
 
     repo, root = _repo(tmp_path); repo.upsert_post(_post("A",""))
-    media=root/"media"; media.mkdir()
+    media=root/"数据与媒体"/"media"; media.mkdir()
     (media/"video.mp4").write_bytes(b"not-a-real-video")
     (media/"cover.png").write_bytes(bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63606060f80f0001040100b51c0c020000000049454e44ae426082"))
     repo.upsert_media(MediaRecord("post","A","video",0,"remote","media/video.mp4"))
@@ -1754,7 +1835,7 @@ def test_real_pdf_does_not_load_invalid_video_without_poster(tmp_path):
 
     repo, root = _repo(tmp_path)
     repo.upsert_post(_post("A", ""))
-    media = root / "media"
+    media = root / "数据与媒体" / "media"
     media.mkdir()
     (media / "video.mp4").write_bytes(b"not-a-real-video")
     repo.upsert_media(
@@ -1838,7 +1919,7 @@ def test_render_cancellation_during_thumbnail_generation_publishes_nothing(tmp_p
 
     repo, root = _repo(tmp_path)
     repo.upsert_post(_post("A", ""))
-    media = root / "media"
+    media = root / "数据与媒体" / "media"
     media.mkdir()
     for index in range(3):
         path = media / f"{index}.png"
@@ -1860,11 +1941,11 @@ def test_render_cancellation_during_thumbnail_generation_publishes_nothing(tmp_p
         root / "微博书.html",
         root / "微博书.pdf",
         root / "微博书.md",
-        root / "data" / "archive-data.js",
+        root / "数据与媒体" / "数据" / "archive-data.js",
     ):
         assert not target.exists()
-    assert not list((root / "data").glob(".render-stage-*"))
-    assert not (root / "data" / ".weishushu-render-state.json").exists()
+    assert not list((root / "数据与媒体" / "数据").glob(".render-stage-*"))
+    assert not (root / "数据与媒体" / "数据" / ".weishushu-render-state.json").exists()
 
 
 def test_pdf_thumbnail_rejects_media_symlink_outside_archive(tmp_path):
@@ -1877,7 +1958,7 @@ def test_pdf_thumbnail_rejects_media_symlink_outside_archive(tmp_path):
     repo.upsert_post(_post("A", ""))
     outside = tmp_path / "outside.png"
     Image.new("RGB", (2, 2), "red").save(outside)
-    media = root / "media"
+    media = root / "数据与媒体" / "media"
     media.mkdir()
     link = media / "escape.png"
     link.symlink_to(outside)
@@ -1990,7 +2071,7 @@ def test_cancel_after_last_fixed_output_publish_restores_previous_files(
         "html": root / "微博书.html",
         "pdf": root / "微博书.pdf",
         "markdown": root / "微博书.md",
-        "data": root / "data" / "archive-data.js",
+        "data": root / "数据与媒体" / "数据" / "archive-data.js",
     }
     previous = {}
     for key, target in targets.items():
@@ -2019,8 +2100,8 @@ def test_cancel_after_last_fixed_output_publish_restores_previous_files(
         )
 
     assert {key: target.read_bytes() for key, target in targets.items()} == previous
-    assert not list((root / "data").glob(".render-stage-*"))
-    assert not (root / "data" / ".weishushu-render-state.json").exists()
+    assert not list((root / "数据与媒体" / "数据").glob(".render-stage-*"))
+    assert not (root / "数据与媒体" / "数据" / ".weishushu-render-state.json").exists()
 
 
 def test_pause_after_pdf_render_restores_outputs_and_next_run_renders_again(tmp_path):
@@ -2033,7 +2114,7 @@ def test_pause_after_pdf_render_restores_outputs_and_next_run_renders_again(tmp_
         "html": root / "微博书.html",
         "pdf": root / "微博书.pdf",
         "markdown": root / "微博书.md",
-        "data": root / "data" / "archive-data.js",
+        "data": root / "数据与媒体" / "数据" / "archive-data.js",
     }
     previous: dict[str, bytes] = {}
     for key, target in targets.items():
@@ -2058,8 +2139,8 @@ def test_pause_after_pdf_render_restores_outputs_and_next_run_renders_again(tmp_
         )
 
     assert {key: target.read_bytes() for key, target in targets.items()} == previous
-    assert not list((root / "data").glob(".render-stage-*"))
-    assert not (root / "data" / ".weishushu-render-state.json").exists()
+    assert not list((root / "数据与媒体" / "数据").glob(".render-stage-*"))
+    assert not (root / "数据与媒体" / "数据" / ".weishushu-render-state.json").exists()
 
     def render_again(_html: Path, pdf: Path) -> None:
         rendered_stages.append(pdf.parent)
@@ -2089,7 +2170,7 @@ def test_cancel_during_final_validation_is_linearized_before_commit(
         "html": root / "微博书.html",
         "pdf": root / "微博书.pdf",
         "markdown": root / "微博书.md",
-        "data": root / "data" / "archive-data.js",
+        "data": root / "数据与媒体" / "数据" / "archive-data.js",
     }
     previous = {}
     for key, target in targets.items():
@@ -2144,9 +2225,9 @@ def test_markdown_links_images_video_live_and_html_anchors(tmp_path):
     )
     markdown = (root / "微博书.md").read_text(encoding="utf-8")
 
-    assert "[![图片](media/posts/thumb.jpg)](media/posts/original.jpg)" in markdown
-    assert "[播放视频](media/posts/video.mp4)" in markdown
-    assert "[![实况照片](media/posts/live.jpg)](media/posts/live.mov)" in markdown
+    assert f"[![图片]({_ASSETS_URL_PREFIX}media/posts/thumb.jpg)]({_ASSETS_URL_PREFIX}media/posts/original.jpg)" in markdown
+    assert f"[播放视频]({_ASSETS_URL_PREFIX}media/posts/video.mp4)" in markdown
+    assert f"[![实况照片]({_ASSETS_URL_PREFIX}media/posts/live.jpg)]({_ASSETS_URL_PREFIX}media/posts/live.mov)" in markdown
     assert "[在互动微博书中查看](微博书.html#post-BID1)" in markdown
     assert "在互动微博书中查看视频" not in markdown
     assert "在互动微博书中查看实况照片" not in markdown
@@ -2252,7 +2333,7 @@ def test_pdf_source_has_relative_media_links_without_local_paths(tmp_path):
     for output in (
         root / "微博书.html",
         root / "微博书.md",
-        root / "data" / "archive-data.js",
+        root / "数据与媒体" / "数据" / "archive-data.js",
     ):
         assert str(root) not in output.read_text(encoding="utf-8")
 
@@ -2267,7 +2348,7 @@ def test_moved_archive_html_media_anchor_opens_the_requested_local_item(tmp_path
         "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
         "0000000d49444154789c63606060f80f0001040100b51c0c020000000049454e44ae426082"
     )
-    image = root / "media" / "posts" / "original.png"
+    image = root / "数据与媒体" / "media" / "posts" / "original.png"
     image.parent.mkdir(parents=True)
     image.write_bytes(png)
     repo.upsert_media(MediaRecord("post", "BID1", "image", 0, "remote", "media/posts/original.png"))
@@ -2291,7 +2372,7 @@ def test_moved_archive_html_media_anchor_opens_the_requested_local_item(tmp_path
         page.wait_for_function("window.__WEISHUSHU_PRINT_READY__ === true")
         assert page.locator('[data-view="detail"]').is_visible()
         assert page.locator("[data-media-lightbox]").is_visible()
-        assert page.locator("[data-lightbox-image]").get_attribute("src") == "media/posts/original.png"
+        assert page.locator("[data-lightbox-image]").get_attribute("src") == _ASSETS_URL_PREFIX + "media/posts/original.png"
         assert page.locator("[data-lightbox-image]").evaluate("image => image.naturalWidth") == 1
         browser.close()
 
@@ -2326,7 +2407,7 @@ def test_real_pdf_has_portable_links_image_appendix_and_return_text(tmp_path):
         "media/posts/video-cover.png": png,
     }
     for relative, content in files.items():
-        path = root / relative
+        path = repo.paths.media_file_path(relative)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
     for role, position, relative in (
@@ -2493,7 +2574,11 @@ def test_pdf_prints_comments_and_local_media_with_unique_owners(tmp_path):
 
 @pytest.mark.parametrize(
     ("media_owner", "expected"),
-    (("main:0", "media/main.png"), ("retweet:0", "media/retweet.png"), ("comment:C1:0", "media/comment.png")),
+    (
+        ("main:0", _ASSETS_URL_PREFIX + "media/main.png"),
+        ("retweet:0", _ASSETS_URL_PREFIX + "media/retweet.png"),
+        ("comment:C1:0", _ASSETS_URL_PREFIX + "media/comment.png"),
+    ),
 )
 def test_moved_archive_namespaced_media_deep_link_focuses_exact_owner(tmp_path, media_owner, expected):
     from playwright.sync_api import sync_playwright
@@ -2507,9 +2592,9 @@ def test_moved_archive_namespaced_media_deep_link_focuses_exact_owner(tmp_path, 
     repo.replace_current_comments("BID1", [CommentRecord("C1", "BID1", None, {"text": "评论", "user_name": "甲"}, "now")])
     png = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63606060f80f0001040100b51c0c020000000049454e44ae426082")
     for owner_type, owner_id, path in (("post", "BID1", "media/main.png"), ("comment", "C1", "media/comment.png")):
-        file_path = root / path; file_path.parent.mkdir(exist_ok=True); file_path.write_bytes(png)
+        file_path = root / "数据与媒体" / path; file_path.parent.mkdir(parents=True, exist_ok=True); file_path.write_bytes(png)
         repo.upsert_media(MediaRecord(owner_type, owner_id, "image", 0, "remote", path))
-    (root / "media" / "retweet.png").write_bytes(png)
+    (root / "数据与媒体" / "media" / "retweet.png").write_bytes(png)
     ArchiveRenderer(repo).render_all(root, render_pdf=lambda _html, pdf: pdf.write_bytes(b"pdf"))
     repo.close(); moved = tmp_path / "moved"; root.rename(moved)
 
@@ -2754,10 +2839,10 @@ def test_interactive_detail_limits_root_comments_and_keeps_current_comment_media
         assert "2026-07-14 02:01" in visible_text
         assert "iPhone" in visible_text
         assert "赞 1" in visible_text
-        assert detail_comments.locator('.comment-avatar[src="media/avatars/user-1.png"]').count() == 1
+        assert detail_comments.locator(f'.comment-avatar[src="{_ASSETS_URL_PREFIX}media/avatars/user-1.png"]').count() == 1
 
         comment_image_button = detail_comments.locator(
-            '[data-local-image="media/comments/root-1.png"]'
+            f'[data-local-image="{_ASSETS_URL_PREFIX}media/comments/root-1.png"]'
         )
         assert comment_image_button.count() == 1
         assert comment_image_button.evaluate("node => node.tagName") == "BUTTON"
@@ -2766,7 +2851,7 @@ def test_interactive_detail_limits_root_comments_and_keeps_current_comment_media
         assert comment_image_button.locator("img").get_attribute("tabindex") is None
         comment_image_button.click()
         assert page.locator("[data-media-lightbox]").is_visible()
-        assert page.locator("[data-lightbox-image]").get_attribute("src") == "media/comments/root-1.png"
+        assert page.locator("[data-lightbox-image]").get_attribute("src") == _ASSETS_URL_PREFIX + "media/comments/root-1.png"
         page.locator('[data-action="lightbox-close"]').click()
         assert comment_image_button.evaluate("node => document.activeElement === node") is True
 
@@ -2800,7 +2885,7 @@ def test_archive_html_pdf_source_and_markdown_keep_original_blank_lines(tmp_path
     ArchiveRenderer(repository).render_all(root, render_pdf=render_pdf)
 
     markdown = (root / "微博书.md").read_text(encoding="utf-8")
-    data = (root / "data" / "archive-data.js").read_text(encoding="utf-8")
+    data = (root / "数据与媒体" / "数据" / "archive-data.js").read_text(encoding="utf-8")
     assert text in markdown
     assert "第一段第一行\\n第一段第二行\\n\\n第二段" in data
     assert "white-space:pre-wrap" in captured_print_html
@@ -3005,3 +3090,588 @@ def test_print_media_grid_book_layout(tmp_path, image_count, expected_columns):
         assert observed["image_fit"] == "contain"
     else:
         assert observed["child_ratio"] != "auto"
+
+
+def test_snapshot_projects_profile_asset_histories_and_cover_url(tmp_path):
+    from weibo_book.archive.render_snapshot import ArchiveRenderSnapshot
+
+    repo, _ = _repo(tmp_path)
+    repo.upsert_post(_post("A", "2026-07-14T01:00:00+00:00"))
+    repo.record_profile_asset(
+        "avatar", "https://example.test/old-avatar.jpg",
+        local_path="媒体/头像/old.jpg",
+        first_seen_at="2025-06-02T00:00:00+00:00", run_id="run-1",
+    )
+    repo.record_profile_asset(
+        "avatar", "https://example.test/new-avatar.jpg",
+        local_path="媒体/头像/new.jpg",
+        first_seen_at="2026-03-01T00:00:00+00:00", run_id="run-2",
+    )
+    # 没有本地文件的记录不进入历史
+    repo.record_profile_asset(
+        "avatar", "https://example.test/no-file.jpg",
+        first_seen_at="2026-09-01T00:00:00+00:00", run_id="run-3",
+    )
+    repo.record_profile_asset(
+        "cover", "https://example.test/cover.jpg",
+        local_path="媒体/封面/cover.jpg",
+        first_seen_at="2026-08-24T00:00:00+00:00", run_id="run-4",
+    )
+
+    repo.set_current_profile_asset("avatar", "https://example.test/new-avatar.jpg")
+    repo.set_current_profile_asset("cover", "https://example.test/cover.jpg")
+
+    snapshot = ArchiveRenderSnapshot.from_repository(repo)
+
+    media_prefix = _ASSETS_URL_PREFIX + quote("媒体") + "/"
+    assert snapshot.user["cover_url"] == (
+        media_prefix + quote("封面") + "/cover.jpg"
+    )
+    assert snapshot.avatar_history == (
+        {
+            "url": media_prefix + quote("头像") + "/new.jpg",
+            "first_seen_at": "2026-03-01T00:00:00+00:00",
+            "current": True,
+        },
+        {
+            "url": media_prefix + quote("头像") + "/old.jpg",
+            "first_seen_at": "2025-06-02T00:00:00+00:00",
+            "current": False,
+        },
+    )
+    assert snapshot.cover_history == (
+        {
+            "url": media_prefix + quote("封面") + "/cover.jpg",
+            "first_seen_at": "2026-08-24T00:00:00+00:00",
+            "current": True,
+        },
+    )
+
+
+def test_snapshot_histories_empty_and_pin_fallback_without_observations(tmp_path):
+    from weibo_book.archive.render_snapshot import ArchiveRenderSnapshot
+
+    repo, _ = _repo(tmp_path)
+    repo.upsert_post(_post("P", "", is_pinned=True, pin_order=1))
+    repo.upsert_post(_post("N", "2026-07-14T01:00:00+00:00"))
+
+    snapshot = ArchiveRenderSnapshot.from_repository(repo)
+
+    assert snapshot.user["cover_url"] == ""
+    assert snapshot.avatar_history == ()
+    assert snapshot.cover_history == ()
+    assert snapshot.pin_history == ()
+    # pin_observations 为空表时回退 posts.is_pinned 行为
+    assert [post["bid"] for post in snapshot.posts] == ["P", "N"]
+
+
+def test_snapshot_pin_badge_and_sort_follow_latest_observation_batch(tmp_path):
+    from weibo_book.archive.render_snapshot import ArchiveRenderSnapshot
+
+    repo, _ = _repo(tmp_path)
+    repo.upsert_post(
+        _post("OLD-PIN", "2026-01-01T00:00:00+00:00", is_pinned=True, pin_order=1)
+    )
+    repo.upsert_post(_post("NEW-PIN", "2025-06-01T00:00:00+00:00"))
+    repo.upsert_post(_post("PLAIN", "2026-08-01T00:00:00+00:00"))
+    repo.record_pin_observations(
+        "run-1", "2026-08-01T00:00:00+00:00", [("OLD-PIN", 1)]
+    )
+    repo.record_pin_observations(
+        "run-2", "2026-09-01T00:00:00+00:00", [("NEW-PIN", 1)]
+    )
+
+    snapshot = ArchiveRenderSnapshot.from_repository(repo)
+
+    by_bid = {post["bid"]: post for post in snapshot.posts}
+    assert by_bid["NEW-PIN"]["is_pinned"] is True
+    # 旧置顶不在最新批次内，降级为普通微博按时间排序
+    assert by_bid["OLD-PIN"]["is_pinned"] is False
+    assert [post["bid"] for post in snapshot.posts] == ["NEW-PIN", "PLAIN", "OLD-PIN"]
+    assert snapshot.pin_history == (
+        {
+            "observed_at": "2026-09-01T00:00:00+00:00",
+            "bids": ("NEW-PIN",),
+        },
+        {"observed_at": "2026-08-01T00:00:00+00:00", "bids": ("OLD-PIN",)},
+    )
+
+
+def test_interactive_html_exposes_history_entries_and_content_tabs(tmp_path):
+    from weibo_book.archive.render_snapshot import ArchiveRenderer
+
+    repo, root = _repo(tmp_path)
+    repo.upsert_post(_post("A", "2026-07-14T01:00:00+00:00"))
+    repo.record_profile_asset(
+        "avatar", "https://example.test/a.jpg", local_path="媒体/头像/a.jpg",
+        first_seen_at="2026-08-24T00:00:00+00:00", run_id="run-1",
+    )
+    repo.record_profile_asset(
+        "cover", "https://example.test/c.jpg", local_path="媒体/封面/c.jpg",
+        first_seen_at="2026-08-24T00:00:00+00:00", run_id="run-1",
+    )
+    repo.set_current_profile_asset("cover", "https://example.test/c.jpg")
+
+    ArchiveRenderer(repo).render_all(
+        root, render_pdf=lambda _html, path: path.write_bytes(b"pdf")
+    )
+    html = (root / "微博书.html").read_text(encoding="utf-8")
+
+    for token in (
+        'data-cover-banner', 'data-action="open-cover-sheet"', "封面相册 ›",
+        'data-action="open-avatar-sheet"', "头像相册 ›",
+        'data-avatar-sheet', 'data-avatar-grid', 'data-cover-sheet', 'data-cover-grid',
+        'data-pin-entry', 'data-action="toggle-pin-entry"', "置顶变迁", "备份时的置顶",
+        'data-otd', 'data-action="toggle-otd"', 'data-otd-cover', "那年今天",
+        "希望你回忆过去时感到心情愉悦并愿意与他人分享",
+        'data-content-tab="feed"', 'data-content-tab="topics"',
+        'data-content-tab="album"', 'data-content-panel="topics"',
+        'data-content-panel="album"',
+        'data-lightbox-video', 'data-live-toggle', 'data-lightbox-live-badge',
+        "查看实况照片", "使用中", "备份记录",
+        "entry-thumbs", "album-month", "[data-media-scope]",
+    ):
+        assert token in html
+    assert "灯箱" not in html
+    # 封面横幅引用本地档案图片
+    cover_src = (
+        _ASSETS_URL_PREFIX + quote("媒体") + "/" + quote("封面") + "/c.jpg"
+    )
+    assert f'<img src="{cover_src}"' in html
+    forbidden = ("fetch(", "XMLHttpRequest", "WebSocket", "http://", "https://")
+    assert all(value not in html for value in forbidden)
+
+
+def test_interactive_html_hides_cover_banner_and_avatar_entry_without_history(tmp_path):
+    from weibo_book.archive.render_snapshot import ArchiveRenderer
+
+    repo, root = _repo(tmp_path)
+    repo.upsert_post(_post("A", "2026-07-14T01:00:00+00:00"))
+    ArchiveRenderer(repo).render_all(
+        root, render_pdf=lambda _html, path: path.write_bytes(b"pdf")
+    )
+    html = (root / "微博书.html").read_text(encoding="utf-8")
+
+    assert 'data-cover-banner' not in html
+    assert 'data-action="open-avatar-sheet"' not in html
+
+
+def test_interactive_history_entries_tabs_and_live_photo_fullscreen(tmp_path):
+    from datetime import datetime
+
+    from playwright.sync_api import sync_playwright
+    from weibo_book.archive.render_snapshot import ArchiveRenderer
+
+    repo, root = _repo(tmp_path)
+    today = datetime.now()
+    on_this_day = (
+        f"{today.year - 1}-{today.month:02d}-{today.day:02d}T12:00:00+08:00"
+    )
+    repo.upsert_post(
+        _post("PIN-OLD", "2025-01-01T00:00:00+00:00", is_pinned=True, pin_order=1)
+    )
+    repo.upsert_post(_post("PIN-NOW", "2026-08-20T00:00:00+00:00"))
+    repo.upsert_post(
+        _post("OTD", on_this_day, text="那年今天的微博", likes_count=1,
+              comments_count=2)
+    )
+    repo.upsert_post(_post("VIDEO", "2026-07-01T00:00:00+00:00"))
+    repo.upsert_post(
+        _post("TOPIC-ONLY", "2026-08-15T00:00:00+00:00", text="只发在超话的微博")
+    )
+    from weibo_book.archive.supertopic import STATE_KEY
+    repo._write_meta(STATE_KEY, {
+        "sources": [{"id": "100808abc", "name": "测试超话"}],
+        "post_sources": {"TOPIC-ONLY": ["100808abc"]},
+        "exclusive_bids": ["TOPIC-ONLY"],
+    })
+    repo.record_pin_observations(
+        "run-1", "2026-08-01T00:00:00+00:00", [("PIN-OLD", 1)]
+    )
+    repo.record_pin_observations(
+        "run-2", "2026-09-01T00:00:00+00:00", [("PIN-NOW", 1)]
+    )
+    for kind, relative_path in (("avatar", "媒体/头像/a.jpg"), ("cover", "媒体/封面/c.jpg")):
+        _write_local_png(root, relative_path)
+        repo.record_profile_asset(
+            kind, f"https://example.test/{kind}.jpg", local_path=relative_path,
+            first_seen_at="2026-08-24T00:00:00+00:00", run_id="run-1",
+        )
+    _write_local_png(root, "media/pic.png")
+    repo.upsert_media(MediaRecord("post", "PIN-NOW", "image", 0, "remote", "media/pic.png"))
+    _write_local_png(root, "media/v-cover.png")
+    (root / "数据与媒体" / "media/clip.mp4").write_bytes(b"local-video")
+    repo.upsert_media(MediaRecord("post", "VIDEO", "video", 0, "remote", "media/clip.mp4"))
+    repo.upsert_media(
+        MediaRecord("post", "VIDEO", "video_cover", 0, "remote", "media/v-cover.png")
+    )
+    _add_live_photo_pair(repo, root, "PIN-NOW", 1, "media/live.png", "media/live.mov")
+    _write_local_png(root, "media/otd.png")
+    repo.upsert_media(MediaRecord("post", "OTD", "image", 0, "remote", "media/otd.png"))
+    repo.set_current_profile_asset("avatar", "https://example.test/avatar.jpg")
+    repo.set_current_profile_asset("cover", "https://example.test/cover.jpg")
+
+    ArchiveRenderer(repo).render_all(
+        root, render_pdf=lambda _html, pdf: pdf.write_bytes(b"pdf")
+    )
+
+    with sync_playwright() as playwright:
+        if not Path(playwright.chromium.executable_path).is_file():
+            pytest.skip("本机未安装 Playwright Chromium")
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.set_default_timeout(5000)
+        requests = []
+        page.on("request", lambda request: requests.append(request.url))
+        page.goto((root / "微博书.html").resolve().as_uri(), wait_until="load")
+        page.wait_for_function("window.__WEISHUSHU_PRINT_READY__ === true")
+
+        # 置顶口径：最新批次的 PIN-NOW 置顶，旧置顶 PIN-OLD 不再置前
+        first_card = page.locator("[data-feed] [data-bid]").first
+        assert first_card.get_attribute("data-bid") == "PIN-NOW"
+        assert first_card.locator(".wb-pin-banner").inner_text() == "置顶"
+        assert page.locator('[data-bid="PIN-OLD"] .wb-pin-banner').count() == 0
+
+        # 封面横幅与封面相册
+        assert page.locator("[data-cover-banner]").is_visible()
+        page.locator('[data-action="open-cover-sheet"]').click()
+        cover_sheet = page.locator("[data-cover-sheet]")
+        assert cover_sheet.is_visible()
+        assert cover_sheet.locator(".cover-cell").count() == 1
+        assert "使用中" in cover_sheet.inner_text()
+        assert "2026-08-24 备份记录" in cover_sheet.inner_text()
+        page.keyboard.press("Escape")
+        assert cover_sheet.is_hidden()
+
+        # 头像相册
+        page.locator('[data-action="open-avatar-sheet"]').first.click()
+        avatar_sheet = page.locator("[data-avatar-sheet]")
+        assert avatar_sheet.is_visible()
+        assert avatar_sheet.locator(".avatar-cell").count() == 1
+        page.locator('[data-action="close-avatar-sheet"]').click()
+        assert avatar_sheet.is_hidden()
+
+        # 置顶变迁
+        pin_entry = page.locator("[data-pin-entry]")
+        assert pin_entry.is_visible()
+        assert "置顶变迁 · 2 次记录" in pin_entry.inner_text()
+        page.locator('[data-action="toggle-pin-entry"]').click()
+        pin_text = pin_entry.inner_text()
+        assert "当前置顶" in pin_text and "历史置顶" in pin_text
+        # 历史置顶的时间不是真实换置顶时间，只有当前置顶显示截止行
+        assert "截止 2026-09-01 备份时的置顶" in pin_text
+        assert "截止 2026-08-01 备份时的置顶" not in pin_text
+        # 置顶卡片带缩略图，点击卡片打开该微博详情
+        assert pin_entry.locator(".entry-thumb").count() == 2  # pic.png 与 live.png
+        pin_entry.locator(".pin-post .text").first.click()
+        assert "post-PIN-NOW" in page.evaluate("location.hash")
+        page.locator('[data-action="back"]').click()
+
+        # 那年今天
+        otd = page.locator("[data-otd]")
+        assert otd.is_visible()
+        page.locator('[data-action="toggle-otd"]').click()
+        otd_text = otd.inner_text()
+        assert "一年前" in otd_text
+        assert "那年今天的微博" in otd_text
+        assert "希望你回忆过去时感到心情愉悦并愿意与他人分享" in otd_text
+        # 条目带图片缩略图：点击进全屏查看，点击条目打开详情
+        otd_thumb = otd.locator(".entry-thumb")
+        assert otd_thumb.count() == 1
+        otd_thumb.first.click()
+        assert page.locator("[data-media-lightbox]").is_visible()
+        page.keyboard.press("Escape")
+        otd.locator(".otd-post .meta").first.click()
+        assert "post-OTD" in page.evaluate("location.hash")
+        page.locator('[data-action="back"]').click()
+
+        # 超话页签：只收超话独占微博，主流不混入；卡片带超话标注，点击进详情
+        assert page.locator('[data-feed] [data-bid="TOPIC-ONLY"]').count() == 0
+        page.locator('[data-content-tab="topics"]').click()
+        topics_panel = page.locator('[data-content-panel="topics"]')
+        assert topics_panel.is_visible()
+        assert page.locator('[data-content-panel="feed"]').is_hidden()
+        topic_cards = topics_panel.locator("[data-bid]")
+        assert topic_cards.count() == 1
+        assert topic_cards.first.get_attribute("data-bid") == "TOPIC-ONLY"
+        assert "只发在超话的微博" in topics_panel.inner_text()
+        assert "超话：测试超话" in topics_panel.inner_text()
+        topic_cards.first.locator(".wb-post-header-button").click()
+        assert "post-TOPIC-ONLY" in page.evaluate("location.hash")
+        page.locator('[data-action="back"]').click()
+        # 资料区计数排除超话独占微博
+        assert "微博正文 · 共 4 条" in page.locator("[data-post-count]").inner_text()
+
+        # 相册页签：按月分组，含实况照片（LIVE 角标），同组可翻页
+        page.locator('[data-content-tab="album"]').click()
+        album_panel = page.locator('[data-content-panel="album"]')
+        assert album_panel.is_visible()
+        months = album_panel.locator(".album-month").all_inner_texts()
+        # “那年今天”微博按当前日期往前推一年生成，其所在月份随运行日期变化
+        assert "08月" in months and f"{today.month:02d}月" in months
+        tiles = album_panel.locator(".album-tile")
+        assert tiles.count() == 3  # pic.png、live.png、otd.png
+        assert album_panel.locator(".album-tile .live-label").count() == 1
+        tiles.first.click()
+        lightbox = page.locator("[data-media-lightbox]")
+        assert lightbox.is_visible()
+        assert page.locator("[data-lightbox-image]").get_attribute("src").endswith(
+            "media/pic.png"
+        )
+        page.locator('[data-action="lightbox-next"]').click()
+        assert page.locator("[data-lightbox-image]").get_attribute("src").endswith(
+            "media/live.png"
+        )
+        assert page.locator("[data-lightbox-live-badge]").is_visible()
+        page.keyboard.press("Escape")
+        assert lightbox.is_hidden()
+
+        # 实况照片点击进入全屏查看，查看层内播放配对视频
+        page.locator('[data-content-tab="feed"]').click()
+        page.locator('[data-feed] [data-bid="PIN-NOW"] [data-live-photo]').click()
+        assert lightbox.is_visible()
+        assert page.locator("[data-lightbox-image]").get_attribute("src").endswith(
+            "media/live.png"
+        )
+        assert page.locator("[data-lightbox-live-badge]").is_visible()
+        live_toggle = page.locator("[data-live-toggle]")
+        assert live_toggle.is_visible()
+        lightbox_video = page.locator("[data-lightbox-video]")
+        _install_valid_webm(lightbox_video)
+        live_toggle.click()
+        assert lightbox_video.evaluate(
+            "video => getComputedStyle(video).display"
+        ) == "block"
+        page.keyboard.press("Escape")
+        assert lightbox.is_hidden()
+
+        # 关注资料空状态：标题不折行，不渲染空白三列
+        page.locator('[data-tab="following"]').click()
+        assert page.locator('[data-view="following"]').is_visible()
+        assert page.locator("[data-following-empty]").is_visible()
+        assert page.locator(".following-layout").is_hidden()
+        assert page.locator(".topbar h1").evaluate(
+            "node => getComputedStyle(node).whiteSpace"
+        ) == "nowrap"
+        browser.close()
+
+    assert not any(
+        url.startswith(("http://", "https://")) for url in requests
+    )
+
+
+@pytest.mark.parametrize("count", [0, 13537480])
+def test_single_fans_observation_visible_by_name_and_history(tmp_path, count):
+    from playwright.sync_api import sync_playwright
+    from weibo_book.archive.render_snapshot import ArchiveRenderer
+    repo, root = _repo(tmp_path)
+    repo.record_fans_observation("one", "2026-09-08T00:00:00+00:00", count)
+    ArchiveRenderer(repo).render_all(root, include_pdf=False, include_markdown=False)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.goto((root / "微博书.html").as_uri())
+        assert page.locator("[data-profile-fans]").is_visible()
+        assert page.locator("[data-profile-fans]").inner_text() == f"{count:,} 粉丝"
+        button = page.locator('[data-action="open-fans-sheet"]')
+        assert button.is_visible()
+        assert button.inner_text() == "粉丝变迁 ›"
+        button.click()
+        assert page.locator("[data-fans-sheet]").is_visible()
+        assert page.locator("[data-fans-list] .fans-row").count() == 1
+        browser.close()
+    repo.close()
+
+
+def test_old_cover_album_remains_accessible_without_current_reference(tmp_path):
+    from weibo_book.archive.render_snapshot import ArchiveRenderer
+    repo, root = _repo(tmp_path)
+    repo.record_profile_asset("cover", "https://example.test/history.jpg",
+                              local_path="media/covers/history.jpg",
+                              first_seen_at="2026-09-08", run_id="old")
+    ArchiveRenderer(repo).render_all(root, include_pdf=False, include_markdown=False)
+    html = (root / "微博书.html").read_text(encoding="utf-8")
+    assert 'data-action="open-cover-sheet"' in html
+    assert 'data-cover-banner' not in html
+    repo.close()
+
+
+@pytest.mark.parametrize("kind", ["avatar", "cover"])
+def test_profile_album_images_open_lightbox_and_return_to_album(tmp_path, kind):
+    from playwright.sync_api import sync_playwright
+    from weibo_book.archive.render_snapshot import ArchiveRenderer
+    repo, root = _repo(tmp_path)
+    for index in range(2):
+        relative = f"media/{kind}-{index}.png"
+        _write_local_png(root, relative)
+        repo.record_profile_asset(kind, f"https://example.test/{kind}-{index}.png",
+                                  local_path=relative, first_seen_at=f"2026-09-0{index+1}", run_id="one")
+    repo.record_fans_observation("one", "2026-09-08", 123)
+    ArchiveRenderer(repo).render_all(root, include_pdf=False, include_markdown=False)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width":1280, "height":900})
+        page.goto((root / "微博书.html").as_uri())
+        page.locator(f'[data-action="open-{kind}-sheet"]').click()
+        images = page.locator(f'[data-{kind}-grid] img')
+        first = images.nth(0).get_attribute("src")
+        second = images.nth(1).get_attribute("src")
+        images.nth(0).click()
+        assert page.locator('[data-media-lightbox]').is_visible()
+        assert page.locator('[data-lightbox-image]').get_attribute('src') == first
+        page.locator('[data-action="zoom-in"]').click()
+        assert page.locator('[data-lightbox-image]').evaluate('e=>Number(e.style.getPropertyValue("--scale"))') > 1
+        page.locator('[data-action="lightbox-next"]').click()
+        assert page.locator('[data-lightbox-image]').get_attribute('src') == second
+        page.keyboard.press('Escape')
+        assert page.locator(f'[data-{kind}-sheet]').is_visible()
+        assert page.locator('[data-media-lightbox]').is_hidden()
+        browser.close()
+    repo.close()
+
+
+def test_profile_entries_are_grouped_at_right(tmp_path):
+    from playwright.sync_api import sync_playwright
+    from weibo_book.archive.render_snapshot import ArchiveRenderer
+    repo, root = _repo(tmp_path)
+    repo.record_profile_asset('avatar','https://example.test/a.jpg',local_path='media/a.jpg',first_seen_at='2026-09-08',run_id='one')
+    repo.record_fans_observation('one','2026-09-08',123)
+    ArchiveRenderer(repo).render_all(root,include_pdf=False,include_markdown=False)
+    with sync_playwright() as p:
+        browser=p.chromium.launch(headless=True)
+        # 900–1199：资料入口仍在资料区右侧横排
+        page=browser.new_page(viewport={'width':1000,'height':900})
+        page.goto((root/'微博书.html').as_uri())
+        a=page.locator('[data-action="open-avatar-sheet"]').bounding_box()
+        f=page.locator('[data-action="open-fans-sheet"]').bounding_box()
+        assert 0 <= f['x']-(a['x']+a['width']) <= 12
+        assert a['y']==f['y']
+        # 版式 V4 宽屏：资料卡位于右栏，入口竖排、左对齐，位于正文右侧
+        page.set_viewport_size({'width':1440,'height':900})
+        a=page.locator('[data-action="open-avatar-sheet"]').bounding_box()
+        f=page.locator('[data-action="open-fans-sheet"]').bounding_box()
+        feed=page.locator('[data-feed]').bounding_box()
+        assert a['x']==f['x'] and f['y']>a['y']
+        assert a['x'] > feed['x']+feed['width']
+        browser.close()
+    repo.close()
+
+
+@pytest.mark.parametrize('declared_videos', [1, 2])
+def test_single_video_snapshot_uses_highest_quality_stored_copy(tmp_path, declared_videos):
+    from dataclasses import replace
+    from weibo_book.archive.render_snapshot import ArchiveRenderSnapshot
+    repo, _ = _repo(tmp_path)
+    repo.upsert_post(replace(_post('V','2026-09-08T00:00:00+00:00'),
+                            media_signature=[{'type':'video','position':i} for i in range(declared_videos)]))
+    repo.upsert_media(MediaRecord('post','V','video',0,
+                     'https://v.test/a.mp4?label=mp4_1080p&template=1920x1080',
+                     'media/high.mp4','ab'*32))
+    repo.upsert_media(MediaRecord('post','V','video',1,
+                     'https://v.test/a.mp4?label=mp4_hd&template=852x480',
+                     'media/low.mp4','cd'*32))
+    media=ArchiveRenderSnapshot.from_repository(repo).posts[0]['media']
+    assert len(media)==declared_videos
+    assert media[0]['local_path']=='media/high.mp4'
+    assert len([m for m in repo.list_media_for_render() if m.role=='video'])==2
+    repo.close()
+
+
+def test_snapshot_dedupes_identical_video_files(tmp_path):
+    """提取层历史版本重复声明的同一视频（内容哈希相同）只展示一份。"""
+    from weibo_book.archive.render_snapshot import ArchiveRenderSnapshot
+
+    repo, _ = _repo(tmp_path)
+    repo.upsert_post(_post(
+        "V", "2026-09-01T00:00:00+00:00",
+        media_signature=[{"type": "video", "url": "u1"}, {"type": "video", "url": "u2"}],
+    ))
+    repo.upsert_media(MediaRecord("post", "V", "video", 0, "u1", "media/V_0.mp4", sha256="same"))
+    repo.upsert_media(MediaRecord("post", "V", "video", 1, "u2", "media/V_1.mp4", sha256="same"))
+    repo.upsert_media(MediaRecord("post", "V", "video", 2, "u3", "media/V_2.mp4", sha256="other"))
+    snapshot = ArchiveRenderSnapshot.from_repository(repo)
+    videos = [item for item in snapshot.posts[0]["media"] if item.get("kind") == "video"]
+    assert [item["local_path"] for item in videos] == ["media/V_0.mp4", "media/V_2.mp4"]
+    repo.close()
+
+
+def test_interactive_search_normalizes_numerals_width_and_scope(tmp_path):
+    from playwright.sync_api import sync_playwright
+    from weibo_book.archive.render_snapshot import ArchiveRenderer
+
+    repo, root = _repo(tmp_path)
+    repo.upsert_post(_post("CN-NUM", "2026-07-01T01:00:00+00:00", text="第二十三个周末"))
+    repo.upsert_post(_post("WIDTH", "2026-07-02T01:00:00+00:00", text="ＡＢＣ全角标题"))
+    repo.upsert_post(_post(
+        "RETWEET",
+        "2026-07-03T01:00:00+00:00",
+        text="转发一下",
+        retweeted_payload={"user_name": "原作者", "text": "独自走夜路回家", "media": []},
+    ))
+    repo.upsert_post(_post("COMMENT-ONLY", "2026-07-04T01:00:00+00:00", text="普通正文"))
+    repo.replace_current_comments(
+        "COMMENT-ONLY",
+        [CommentRecord("C1", "COMMENT-ONLY", None, {"text": "评论里的秘密词"}, "now")],
+    )
+    ArchiveRenderer(repo).render_all(root, render_pdf=lambda _html, path: path.write_bytes(b"pdf"))
+
+    with sync_playwright() as playwright:
+        if not Path(playwright.chromium.executable_path).is_file():
+            pytest.skip("本机未安装 Playwright Chromium")
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_default_timeout(5000)
+        page.goto((root / "微博书.html").resolve().as_uri(), wait_until="load")
+        page.wait_for_function("window.__WEISHUSHU_PRINT_READY__ === true")
+        page.click('[data-action="open-search"]')
+        page.wait_for_function("!document.querySelector('[data-view=\"search\"]').hidden")
+
+        def search(term, expected_bids):
+            page.fill('[data-search-input]', term)
+            page.wait_for_function(
+                "expected => Array.from(document.querySelectorAll('[data-search-results] .feed-card'))"
+                ".map(card => card.dataset.bid).join(',') === expected",
+                arg=",".join(expected_bids),
+            )
+
+        search("23", ["CN-NUM"])
+        search("二十三", ["CN-NUM"])
+        search("abc", ["WIDTH"])
+        search("ＡＢＣ", ["WIDTH"])
+        search("走夜路", ["RETWEET"])
+        search("秘密词", [])
+
+        page.fill('[data-search-input]', "第二十三个")
+        page.wait_for_function("document.querySelectorAll('[data-search-results] mark').length > 0")
+
+        page.click('[data-search-results] .feed-card [data-open-post]')
+        page.wait_for_function("!document.querySelector('[data-view=\"detail\"]').hidden")
+        page.wait_for_function("document.querySelector('[data-view=\"search\"]').hidden")
+        browser.close()
+
+
+def test_interactive_search_limits_results_to_fifty_and_reports_total(tmp_path):
+    from playwright.sync_api import sync_playwright
+    from weibo_book.archive.render_snapshot import ArchiveRenderer
+
+    repo, root = _repo(tmp_path)
+    for index in range(60):
+        repo.upsert_post(_post(f"L{index:02d}", f"2026-07-{(index % 28) + 1:02d}T01:00:00+00:00", text=f"限量目标词 第{index}条"))
+    ArchiveRenderer(repo).render_all(root, render_pdf=lambda _html, path: path.write_bytes(b"pdf"))
+
+    with sync_playwright() as playwright:
+        if not Path(playwright.chromium.executable_path).is_file():
+            pytest.skip("本机未安装 Playwright Chromium")
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_default_timeout(5000)
+        page.goto((root / "微博书.html").resolve().as_uri(), wait_until="load")
+        page.wait_for_function("window.__WEISHUSHU_PRINT_READY__ === true")
+        page.click('[data-action="open-search"]')
+        page.fill('[data-search-input]', "限量目标词")
+        page.wait_for_function("document.querySelectorAll('[data-search-results] .feed-card').length === 50")
+        summary = page.locator("[data-search-summary]").inner_text()
+        browser.close()
+
+    assert "60" in summary
+    assert "50" in summary

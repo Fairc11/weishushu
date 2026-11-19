@@ -344,5 +344,8 @@ def test_image_download_accepts_matching_content_type_and_nonempty_body(tmp_path
 def test_download_referer_is_only_sent_to_exact_weibo_sina_hosts():
     assert media_service.download_headers_for_url("https://wx1.sinaimg.cn/large/a.jpg") == {"Referer": "https://weibo.com/"}
     assert media_service.download_headers_for_url("https://video.weibo.com/a.mp4") == {"Referer": "https://weibo.com/"}
+    # 视频 CDN f.video.weibocdn.com 防盗链：不带 Referer 直接 403（2026-09-07 实测）
+    assert media_service.download_headers_for_url("https://f.video.weibocdn.com/o0/a.mp4?label=mp4_hd") == {"Referer": "https://weibo.com/"}
     assert media_service.download_headers_for_url("https://i0.hdslb.com/bfs/a.jpg") == {}
     assert media_service.download_headers_for_url("https://weibo.com.evil.example/a.jpg") == {}
+    assert media_service.download_headers_for_url("https://weibocdn.com.evil.example/a.mp4") == {}

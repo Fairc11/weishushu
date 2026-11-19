@@ -1,10 +1,10 @@
-"""v2.0.1 首启风险须知标记文件服务。
+"""v2.2.0 首启风险须知标记文件服务。
 
 读/写首启标记文件：
-- frozen 模式：`settings.state_dir / first_run_v2.0.1.json`
-- dev 模式：项目根 `.run/state/first_run_v2.0.1.json`
+- frozen 模式：`settings.state_dir / first_run_v2.2.0.json`
+- dev 模式：项目根 `.run/state/first_run_v2.2.0.json`
 
-标记文件存在 = 用户已接受 v2.0.1 风险须知（10 不做清单）。
+标记文件存在 = 用户已接受 v2.2.0 风险须知（10 不做清单）。
 前端启动时调 `/api/first-run/check` 判断是否弹模态。
 """
 from __future__ import annotations
@@ -18,9 +18,9 @@ from backend.app.config import settings
 
 logger = logging.getLogger(__name__)
 
-MARKER_FILENAME = "first_run_v2.0.1.json"
+MARKER_FILENAME = "first_run_v2.2.0.json"
 SCHEMA_VERSION = 1
-ACCEPTED_VERSION = "2.0.1"
+ACCEPTED_VERSION = "2.2.0"
 
 
 def _marker_path() -> Path:
@@ -48,5 +48,5 @@ def accept() -> Path:
         ),
         encoding="utf-8",
     )
-    logger.info("v2.0.1 风险须知已接受：%s", p)
+    logger.info("v2.2.0 风险须知已接受：%s", p)
     return p

@@ -9,14 +9,27 @@ import sqlite3
 import uuid
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
 from weibo_book.errors import WeiboError
 
 from .fingerprint import content_fingerprint
-from .media_layout import media_path_shape, migrate_media_layout
+from .profile_assets import profile_asset_identity
+from .video_playback import video_quality_score
+from .media_layout import (
+    media_path_shape,
+    migrate_media_layout,
+    read_media_layout_version,
+)
+from .paths import (
+    ROOT_LAYOUT_VERSION,
+    ArchivePaths,
+    detect_root_layout,
+    read_root_layout_version,
+    write_root_layout_version,
+)
 from .following import (
     FollowingChangeRecord,
     FollowingCommitResult,
@@ -27,13 +40,15 @@ from .following import (
 )
 from .schema import (
     DATABASE_NAME,
-    MANIFEST_NAME,
     SCHEMA_VERSION,
     ArchiveManifest,
     CommentRecord,
+    FansObservationRecord,
     MediaRecord,
+    PinObservationRecord,
     PostRecord,
     PostRevisionRecord,
+    ProfileAssetRecord,
     initialize_schema,
     migrate_schema,
     read_schema_version,
@@ -42,6 +57,8 @@ from .schema import (
 
 
 logger = logging.getLogger(__name__)
+
+_PROFILE_ASSET_KINDS = ("avatar", "cover")
 
 
 class ArchiveError(WeiboError):
@@ -104,20 +121,37 @@ class ArchiveRepository:
         root: Path,
         connection: sqlite3.Connection,
         manifest: ArchiveManifest,
+        paths: ArchivePaths | None = None,
+        media_layout_migrated: bool = False,
     ):
         self._root = root
         self._connection = connection
         self._manifest = manifest
+        self._paths = paths if paths is not None else ArchivePaths(
+            root, ROOT_LAYOUT_VERSION
+        )
+        self._media_layout_migrated = media_layout_migrated
+
+    @property
+    def paths(self) -> ArchivePaths:
+        """当前归档的根布局路径解析。"""
+        return self._paths
+
+    @property
+    def media_layout_migrated(self) -> bool:
+        """本次 open 是否推进了媒体布局版本。"""
+        return self._media_layout_migrated
 
     @classmethod
     def create(cls, root: Path, uid: str, screen_name: str) -> "ArchiveRepository":
         root = Path(root)
+        paths = ArchivePaths(root, ROOT_LAYOUT_VERSION)
         root_existed = root.exists()
         root_created = False
         data_dir_created = False
         connection: sqlite3.Connection | None = None
-        data_dir = root / "data"
-        database_path = data_dir / DATABASE_NAME
+        data_dir = paths.data_dir
+        database_path = paths.database_path
         manifest = ArchiveManifest(
             schema_version=SCHEMA_VERSION,
             uid=uid,
@@ -129,13 +163,14 @@ class ArchiveRepository:
                 raise ArchiveError("归档目录不是空目录")
             root.mkdir(parents=True, exist_ok=True)
             root_created = not root_existed
-            data_dir.mkdir()
+            data_dir.mkdir(parents=True)
             data_dir_created = True
             connection = sqlite3.connect(
                 database_path, isolation_level=None
             )
             initialize_schema(connection)
-            _write_manifest_atomic(root / MANIFEST_NAME, manifest)
+            write_root_layout_version(connection, ROOT_LAYOUT_VERSION)
+            _write_manifest_atomic(paths.manifest_path, manifest)
         except Exception as exc:
             if connection is not None:
                 connection.close()
@@ -151,36 +186,42 @@ class ArchiveRepository:
                         pass
                 try:
                     data_dir.rmdir()
-                except FileNotFoundError:
+                except (FileNotFoundError, OSError):
+                    pass
+                try:
+                    paths.assets_dir.rmdir()
+                except (FileNotFoundError, OSError):
                     pass
             if root_created:
                 try:
                     root.rmdir()
-                except FileNotFoundError:
+                except (FileNotFoundError, OSError):
                     pass
             if isinstance(exc, ArchiveError):
                 raise
             raise ArchiveError("创建归档失败", original=exc) from exc
         assert connection is not None
-        return cls(root, connection, manifest)
+        return cls(root, connection, manifest, paths)
 
     @classmethod
     def open(cls, root: Path, expected_uid: str) -> "ArchiveRepository":
         root = Path(root)
-        manifest_path = root / MANIFEST_NAME
+        layout_version = detect_root_layout(root)
+        paths = ArchivePaths(root, layout_version)
+        manifest_path = paths.manifest_path
         try:
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest = ArchiveManifest(**payload)
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError) as exc:
             raise ArchiveError("归档清单损坏，无法读取", original=exc) from exc
-        if manifest.schema_version not in {1, SCHEMA_VERSION}:
+        if manifest.schema_version not in {1, 2, 3, SCHEMA_VERSION}:
             raise ArchiveError(
                 f"归档版本不受支持：{manifest.schema_version}"
             )
         if manifest.uid != expected_uid:
             raise ArchiveIdentityError("该归档属于其他账号，已拒绝打开")
 
-        database_path = root / "data" / DATABASE_NAME
+        database_path = paths.database_path
         if not database_path.is_file():
             raise ArchiveError("归档数据库不存在")
         try:
@@ -192,8 +233,12 @@ class ArchiveRepository:
             if integrity is None or integrity[0] != "ok":
                 raise sqlite3.DatabaseError("完整性检查未通过")
             database_version = read_schema_version(connection)
-            if database_version == 1:
-                migrate_schema(connection, database_version)
+            if database_version in (1, 2, 3):
+                migrate_schema(
+                    connection,
+                    database_version,
+                    seed_observed_at=manifest.last_successful_sync_at,
+                )
             elif database_version == SCHEMA_VERSION:
                 validate_schema(connection)
             else:
@@ -209,17 +254,115 @@ class ArchiveRepository:
             except UnboundLocalError:
                 pass
             raise ArchiveError("归档数据库损坏，无法打开", original=exc) from exc
+        media_version_before = read_media_layout_version(connection)
         try:
-            migrate_media_layout(root, connection)
+            if layout_version >= ROOT_LAYOUT_VERSION:
+                # 根布局已是 v2：媒体布局必须随 local_path 语义一起推进到 4，
+                # 失败不能保留旧布局（路径基准已变，旧形状无法解析）。
+                migrate_media_layout(paths, connection)
+                if read_root_layout_version(connection) != ROOT_LAYOUT_VERSION:
+                    write_root_layout_version(connection, ROOT_LAYOUT_VERSION)
+            else:
+                migrate_media_layout(paths, connection)
         except Exception as exc:
+            if layout_version >= ROOT_LAYOUT_VERSION:
+                connection.close()
+                raise ArchiveError("归档目录布局迁移失败", original=exc) from exc
             logger.warning("归档媒体目录迁移失败，已保留旧布局：%s", exc)
-        return cls(root, connection, manifest)
+        media_layout_migrated = (
+            read_media_layout_version(connection) != media_version_before
+        )
+        return cls(root, connection, manifest, paths, media_layout_migrated)
 
     def close(self) -> None:
         self._connection.close()
 
     def manifest(self) -> ArchiveManifest:
         return self._manifest
+
+    def _read_meta(self, key: str) -> object | None:
+        try:
+            row = self._connection.execute(
+                "SELECT value_json FROM archive_meta WHERE key = ?",
+                (key,),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise ArchiveError("读取归档设置失败", original=exc) from exc
+        if row is None:
+            return None
+        try:
+            return json.loads(row[0])
+        except json.JSONDecodeError as exc:
+            raise ArchiveError("归档设置记录无效", original=exc) from exc
+
+    def _write_meta(self, key: str, value: object) -> None:
+        try:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO archive_meta(key, value_json) VALUES (?, ?)",
+                (key, json.dumps(value, ensure_ascii=False)),
+            )
+        except sqlite3.Error as exc:
+            raise ArchiveError("写入归档设置失败", original=exc) from exc
+
+    def read_history_cutoff(self) -> str | None:
+        """已建档到的最老截止日期（YYYY-MM-DD）；缺省或 null 表示无限制。"""
+        value = self._read_meta("history_cutoff")
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ArchiveError("归档历史截止记录无效")
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError as exc:
+            raise ArchiveError("归档历史截止记录无效", original=exc) from exc
+        if parsed.isoformat() != value:
+            raise ArchiveError("归档历史截止记录无效")
+        return value
+
+    def write_history_cutoff(self, value: str | None) -> None:
+        if value is not None:
+            if not isinstance(value, str):
+                raise ArchiveError("归档历史截止日期无效")
+            try:
+                parsed = date.fromisoformat(value)
+            except ValueError as exc:
+                raise ArchiveError("归档历史截止日期无效", original=exc) from exc
+            if parsed.isoformat() != value:
+                raise ArchiveError("归档历史截止日期无效")
+        self._write_meta("history_cutoff", value)
+
+    def read_history_complete(self) -> bool:
+        """历史是否已补全；缺省 true（旧版本建档均为全量）。"""
+        value = self._read_meta("history_complete")
+        if value is None:
+            return True
+        if type(value) is not bool:
+            raise ArchiveError("归档历史完整性记录无效")
+        return value
+
+    def write_history_complete(self, value: bool) -> None:
+        if type(value) is not bool:
+            raise ArchiveError("归档历史完整性取值无效")
+        self._write_meta("history_complete", value)
+
+    def read_output_formats(self) -> dict[str, bool]:
+        """额外成品格式开关（HTML 恒生成）；缺省只出互动 HTML。"""
+        value = self._read_meta("output_formats")
+        if value is None:
+            return {"pdf": False, "markdown": False}
+        if not isinstance(value, dict) or not set(value) <= {"pdf", "markdown"}:
+            raise ArchiveError("归档保存格式设置无效")
+        formats = {"pdf": False, "markdown": False}
+        for key, item in value.items():
+            if type(item) is not bool:
+                raise ArchiveError("归档保存格式设置无效")
+            formats[key] = item
+        return formats
+
+    def write_output_formats(self, *, pdf: bool, markdown: bool) -> None:
+        if type(pdf) is not bool or type(markdown) is not bool:
+            raise ArchiveError("归档保存格式取值无效")
+        self._write_meta("output_formats", {"pdf": pdf, "markdown": markdown})
 
     def root_path(self) -> Path:
         """返回当前 repository 打开的精确归档根目录。"""
@@ -922,6 +1065,315 @@ class ArchiveRepository:
         except sqlite3.Error as exc:
             raise ArchiveError("读取媒体渲染快照失败", original=exc) from exc
 
+    def record_profile_asset(
+        self,
+        kind: str,
+        remote_url: str,
+        local_path: str = "",
+        sha256: str = "",
+        *,
+        first_seen_at: str,
+        run_id: str,
+    ) -> bool:
+        """记录一次头像/封面观察；返回是否为新记录。
+
+        同 kind 图片按 URL 路径文件名去重，保留最早首次观察时间。
+        缺少本地文件时补全路径；不删除旧版本已经写入的重复行。
+        """
+        if kind not in _PROFILE_ASSET_KINDS:
+            raise ArchiveError("资料媒体类型无效")
+        if not isinstance(remote_url, str) or not remote_url:
+            raise ArchiveError("资料媒体链接不能为空")
+        if not isinstance(first_seen_at, str) or not first_seen_at:
+            raise ArchiveError("资料媒体首次观察时间不能为空")
+        if not isinstance(run_id, str):
+            raise ArchiveError("资料媒体运行标识无效")
+        if local_path and media_path_shape(local_path) is None:
+            raise ArchiveError("资料媒体本地路径必须是归档媒体目录下有效的 POSIX 相对路径")
+        try:
+            identity = profile_asset_identity(remote_url)
+            existing = next((asset for asset in reversed(self.list_profile_assets(kind))
+                             if profile_asset_identity(asset.remote_url) == identity), None)
+            if existing is not None:
+                self._connection.execute(
+                    "UPDATE profile_assets SET first_seen_at = MIN(first_seen_at, ?) "
+                    "WHERE kind = ? AND remote_url = ?",
+                    (first_seen_at, kind, existing.remote_url),
+                )
+                if local_path and not existing.local_path:
+                    self._connection.execute(
+                        "UPDATE profile_assets SET local_path = ?, sha256 = ? "
+                        "WHERE kind = ? AND remote_url = ?",
+                        (local_path, sha256, kind, existing.remote_url),
+                    )
+                return False
+            cursor = self._connection.execute(
+                """
+                INSERT OR IGNORE INTO profile_assets(
+                    kind, remote_url, local_path, sha256, first_seen_at, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (kind, remote_url, local_path, sha256, first_seen_at, run_id),
+            )
+            if cursor.rowcount == 1:
+                return True
+            if local_path:
+                self._connection.execute(
+                    """
+                    UPDATE profile_assets SET local_path = ?, sha256 = ?
+                    WHERE kind = ? AND remote_url = ? AND local_path = ''
+                    """,
+                    (local_path, sha256, kind, remote_url),
+                )
+            return False
+        except sqlite3.Error as exc:
+            raise ArchiveError("保存资料媒体记录失败", original=exc) from exc
+
+    def set_current_profile_asset(self, kind: str, remote_url: str) -> None:
+        """保存当前资料接口明确返回的图片；空字符串表示当前没有图片。"""
+        if kind not in _PROFILE_ASSET_KINDS or not isinstance(remote_url, str):
+            raise ArchiveError("当前资料图片记录无效")
+        self._write_meta("current_profile_asset_" + kind, remote_url)
+
+    def get_current_profile_asset(self, kind: str) -> str:
+        if kind not in _PROFILE_ASSET_KINDS:
+            raise ArchiveError("资料媒体类型无效")
+        value = self._read_meta("current_profile_asset_" + kind)
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise ArchiveError("当前资料图片记录无效")
+        return value
+
+    def list_profile_assets(self, kind: str | None = None) -> list[ProfileAssetRecord]:
+        """按首次观察时间倒序读取头像/封面历史记录。"""
+        if kind is not None and kind not in _PROFILE_ASSET_KINDS:
+            raise ArchiveError("资料媒体类型无效")
+        try:
+            if kind is None:
+                rows = self._connection.execute(
+                    "SELECT kind, remote_url, local_path, sha256, first_seen_at, run_id "
+                    "FROM profile_assets ORDER BY first_seen_at DESC, id DESC"
+                ).fetchall()
+            else:
+                rows = self._connection.execute(
+                    "SELECT kind, remote_url, local_path, sha256, first_seen_at, run_id "
+                    "FROM profile_assets WHERE kind = ? "
+                    "ORDER BY first_seen_at DESC, id DESC",
+                    (kind,),
+                ).fetchall()
+            return [ProfileAssetRecord(*row) for row in rows]
+        except sqlite3.Error as exc:
+            raise ArchiveError("读取资料媒体记录失败", original=exc) from exc
+
+    def record_pin_observations(
+        self,
+        run_id: str,
+        observed_at: str,
+        items: list[tuple[str, int | None]],
+    ) -> None:
+        """整批记录一次成功同步观察到的置顶微博（可重入）。"""
+        if not isinstance(run_id, str) or not run_id:
+            raise ArchiveError("置顶观察运行标识不能为空")
+        if not isinstance(observed_at, str) or not observed_at:
+            raise ArchiveError("置顶观察时间不能为空")
+        normalized: list[tuple[str, str, str, int | None]] = []
+        for item in items:
+            if not isinstance(item, (tuple, list)) or len(item) != 2:
+                raise ArchiveError("置顶观察条目无效")
+            bid, pin_order = item
+            if not isinstance(bid, str) or not bid:
+                raise ArchiveError("置顶观察条目无效")
+            if pin_order is not None and (
+                isinstance(pin_order, bool) or not isinstance(pin_order, int)
+            ):
+                raise ArchiveError("置顶观察条目无效")
+            normalized.append((run_id, observed_at, bid, pin_order))
+        if not normalized:
+            return
+        try:
+            self._connection.executemany(
+                """
+                INSERT OR IGNORE INTO pin_observations(
+                    run_id, observed_at, bid, pin_order
+                ) VALUES (?, ?, ?, ?)
+                """,
+                normalized,
+            )
+        except sqlite3.Error as exc:
+            raise ArchiveError("保存置顶观察记录失败", original=exc) from exc
+
+    def list_pin_observations(self) -> list[PinObservationRecord]:
+        """按观察时间倒序、置顶序号升序读取全部置顶观察。"""
+        try:
+            rows = self._connection.execute(
+                "SELECT run_id, observed_at, bid, pin_order FROM pin_observations "
+                "ORDER BY observed_at DESC, pin_order ASC, bid ASC"
+            ).fetchall()
+            return [PinObservationRecord(*row) for row in rows]
+        except sqlite3.Error as exc:
+            raise ArchiveError("读取置顶观察记录失败", original=exc) from exc
+
+    def latest_pin_bids(self) -> set[str]:
+        """读取最新一次观察批次里的置顶微博集合。"""
+        try:
+            rows = self._connection.execute(
+                """
+                SELECT bid FROM pin_observations
+                WHERE observed_at = (
+                    SELECT MAX(observed_at) FROM pin_observations
+                )
+                """
+            ).fetchall()
+            return {row[0] for row in rows}
+        except sqlite3.Error as exc:
+            raise ArchiveError("读取当前置顶微博失败", original=exc) from exc
+
+    def record_fans_observation(
+        self,
+        run_id: str,
+        observed_at: str,
+        followers_count: int,
+    ) -> None:
+        """记录一次成功同步观察到的粉丝数（可重入，每次运行一条）。"""
+        if not isinstance(run_id, str) or not run_id:
+            raise ArchiveError("粉丝数观察运行标识不能为空")
+        if not isinstance(observed_at, str) or not observed_at:
+            raise ArchiveError("粉丝数观察时间不能为空")
+        if (
+            isinstance(followers_count, bool)
+            or not isinstance(followers_count, int)
+            or followers_count < 0
+        ):
+            raise ArchiveError("粉丝数观察数值无效")
+        try:
+            self._connection.execute(
+                """
+                INSERT OR IGNORE INTO fans_observations(
+                    run_id, observed_at, followers_count
+                ) VALUES (?, ?, ?)
+                """,
+                (run_id, observed_at, followers_count),
+            )
+        except sqlite3.Error as exc:
+            raise ArchiveError("保存粉丝数观察记录失败", original=exc) from exc
+
+    def list_fans_observations(self) -> list[FansObservationRecord]:
+        """按观察时间倒序读取全部粉丝数观察。"""
+        try:
+            rows = self._connection.execute(
+                "SELECT run_id, observed_at, followers_count FROM fans_observations "
+                "ORDER BY observed_at DESC, id DESC"
+            ).fetchall()
+            return [FansObservationRecord(*row) for row in rows]
+        except sqlite3.Error as exc:
+            raise ArchiveError("读取粉丝数观察记录失败", original=exc) from exc
+
+    def list_posts_missing_video(self) -> list[tuple[str, str]]:
+        """返回签名含视频但尚无本地视频文件的微博 ``(bid, created_at)``，新帖在前。
+
+        用于修复性补抓：早期版本因视频 CDN 防盗链未带 Referer，视频本体
+        下载全部 403（只有封面落库），且签名 URL 会过期，必须重新抓帖
+        拿新 URL 后补下载。
+        """
+        try:
+            rows = self._connection.execute(
+                """
+                SELECT bid, created_at FROM posts
+                WHERE media_signature_json LIKE '%"type": "video"%'
+                AND visibility = 'visible'
+                AND NOT EXISTS (
+                    SELECT 1 FROM media
+                    WHERE media.owner_type = 'post'
+                      AND media.owner_id = posts.bid
+                      AND media.role = 'video'
+                )
+                ORDER BY created_at DESC, bid ASC
+                """
+            ).fetchall()
+            return [(row[0], row[1]) for row in rows]
+        except sqlite3.Error as exc:
+            raise ArchiveError("读取待补抓视频微博失败", original=exc) from exc
+
+    def list_low_quality_video_posts(self) -> list[tuple[str, str, str]]:
+        """列出未按当前 PC 播放列表核验、且不足 1080p 的单视频记录。
+
+        旧 video_ld_confirmed 没有证明 PC 查询成功，不作为本轮确认依据。
+        确认与当前下载 URL 绑定；媒体改变后允许重新检查。
+        """
+        confirmed = self._read_meta("video_quality_checked_v2")
+        confirmed = confirmed if isinstance(confirmed, dict) else {}
+        try:
+            rows = self._connection.execute(
+                """
+                SELECT posts.bid, posts.created_at, media.remote_url
+                FROM posts
+                JOIN media ON media.owner_type = 'post'
+                          AND media.owner_id = posts.bid
+                          AND media.role = 'video'
+                          AND media.position = 0
+                WHERE posts.visibility = 'visible'
+                ORDER BY posts.created_at DESC, posts.bid ASC
+                """
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise ArchiveError("读取待核验视频微博失败", original=exc) from exc
+        return [tuple(row) for row in rows
+                if (score := video_quality_score(row[2])) != (0, 0)
+                and score[0] < 1920 * 1080
+                and confirmed.get(row[0]) != row[2]]
+
+    def confirm_low_quality_video(self, bid: str) -> None:
+        """PC 查询成功且无更高清版本时，记录已核验的当前下载 URL。"""
+        try:
+            row = self._connection.execute(
+                "SELECT remote_url FROM media WHERE owner_type = 'post' "
+                "AND owner_id = ? AND role = 'video' AND position = 0", (bid,),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise ArchiveError("读取视频核验记录失败", original=exc) from exc
+        if row is None:
+            return
+        existing = self._read_meta("video_quality_checked_v2")
+        checked = dict(existing) if isinstance(existing, dict) else {}
+        checked[bid] = row[0]
+        self._write_meta("video_quality_checked_v2", checked)
+
+    def list_live_posts_without_replay(self) -> list[tuple[str, str, str]]:
+        """返回带直播卡片但尚未落库回放的微博 ``(bid, created_at, link_card_json)``。
+
+        已确认无回放（直播未留回放或已下架）的微博记入 ``archive_meta``
+        名单，不再重复抓取。
+        """
+        confirmed = self._read_meta("live_replay_unavailable")
+        confirmed_set = set(confirmed) if isinstance(confirmed, list) else set()
+        try:
+            rows = self._connection.execute(
+                """
+                SELECT bid, created_at, link_card_json FROM posts
+                WHERE link_card_json LIKE '%"type": "live"%'
+                AND visibility = 'visible'
+                AND NOT EXISTS (
+                    SELECT 1 FROM media
+                    WHERE media.owner_type = 'post'
+                      AND media.owner_id = posts.bid
+                      AND media.role = 'live_replay'
+                )
+                ORDER BY created_at DESC, bid ASC
+                """
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise ArchiveError("读取直播微博失败", original=exc) from exc
+        return [tuple(row) for row in rows if row[0] not in confirmed_set]
+
+    def confirm_live_replay_unavailable(self, bid: str) -> None:
+        """把微博记入「直播无回放」确认名单，回放补抓不再触碰。"""
+        existing = self._read_meta("live_replay_unavailable")
+        bids = list(existing) if isinstance(existing, list) else []
+        if bid not in bids:
+            bids.append(bid)
+            self._write_meta("live_replay_unavailable", bids)
+
     def upsert_post(self, post: PostRecord) -> None:
         try:
             self._connection.execute(
@@ -1068,6 +1520,15 @@ class ArchiveRepository:
             self.upsert_post(post)
             return PostChangeResult(kind="content_changed")
 
+    def has_comments(self, bid: str) -> bool:
+        try:
+            row = self._connection.execute(
+                "SELECT 1 FROM comments WHERE post_bid = ? LIMIT 1", (bid,)
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise ArchiveError("读取微博评论失败", original=exc) from exc
+        return row is not None
+
     def replace_current_comments(
         self, bid: str, comments: list[CommentRecord]
     ) -> None:
@@ -1099,7 +1560,7 @@ class ArchiveRepository:
     def upsert_media(self, media: MediaRecord) -> None:
         path = media.local_path
         if media_path_shape(path) is None:
-            raise ArchiveError("媒体本地路径必须是 media/ 下有效的 POSIX 相对路径")
+            raise ArchiveError("媒体本地路径必须是归档媒体目录下有效的 POSIX 相对路径")
         try:
             self._connection.execute(
                 """
@@ -1304,7 +1765,7 @@ class ArchiveRepository:
     def update_manifest_success(self, successful_at: str) -> None:
         updated = replace(self._manifest, last_successful_sync_at=successful_at)
         try:
-            _write_manifest_atomic(self._root / MANIFEST_NAME, updated)
+            _write_manifest_atomic(self._paths.manifest_path, updated)
         except OSError as exc:
             raise ArchiveError("更新归档成功时间失败", original=exc) from exc
         self._manifest = updated

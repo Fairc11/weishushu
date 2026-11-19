@@ -70,7 +70,9 @@ def test_archive_data_contains_timeline_without_changing_payload_schema(tmp_path
         root, render_pdf=lambda _html, pdf: pdf.write_bytes(b"pdf")
     )
 
-    source = (root / "data" / "archive-data.js").read_text(encoding="utf-8")
+    source = (root / "数据与媒体" / "数据" / "archive-data.js").read_text(
+        encoding="utf-8"
+    )
     payload = json.loads(
         source.removeprefix("window.__WEISHUSHU_ARCHIVE__ = ").removesuffix(";\n")
     )
@@ -396,20 +398,25 @@ def test_historical_window_keeps_detail_media_and_reading_position_offline(tmp_p
         "08060000001f15c4890000000d49444154789c63606060f80f"
         "0001040100b51c0c020000000049454e44ae426082"
     )
-    for position, path in enumerate(("media/early-1.png", "media/early-2.png")):
-        image = root / path
+    for position, path in enumerate(
+        ("媒体/微博图片/early-1.png", "媒体/微博图片/early-2.png")
+    ):
+        image = repository.paths.media_file_path(path)
         image.parent.mkdir(parents=True, exist_ok=True)
         image.write_bytes(png)
         repository.upsert_media(
             MediaRecord("post", target, "image", position, "remote", path)
         )
-    comment_image = root / "media/early-comment.png"
+    comment_image = repository.paths.media_file_path("媒体/评论图片/early-comment.png")
+    comment_image.parent.mkdir(parents=True, exist_ok=True)
     comment_image.write_bytes(png)
     repository.upsert_media(
-        MediaRecord("comment", "C1", "image", 0, "remote", "media/early-comment.png")
+        MediaRecord(
+            "comment", "C1", "image", 0, "remote", "媒体/评论图片/early-comment.png"
+        )
     )
-    live_image = root / "media/early-live.png"
-    live_video = root / "media/early-live.mov"
+    live_image = repository.paths.media_file_path("媒体/微博图片/early-live.png")
+    live_video = repository.paths.media_file_path("媒体/微博图片/early-live.mov")
     live_image.write_bytes(png)
     live_video.write_bytes(b"local-live-video")
     repository.upsert_media(
@@ -419,12 +426,12 @@ def test_historical_window_keeps_detail_media_and_reading_position_offline(tmp_p
             "live_photo_thumbnail",
             2,
             "remote",
-            "media/early-live.png",
+            "媒体/微博图片/early-live.png",
         )
     )
     repository.upsert_media(
         MediaRecord(
-            "post", target, "live_photo", 2, "remote", "media/early-live.mov"
+            "post", target, "live_photo", 2, "remote", "媒体/微博图片/early-live.mov"
         )
     )
     ArchiveRenderer(repository).render_all(
@@ -451,23 +458,12 @@ def test_historical_window_keeps_detail_media_and_reading_position_offline(tmp_p
         assert page.locator("[data-media-lightbox]").is_visible()
         page.keyboard.press("Escape")
         live_photo = feed_card.locator("[data-live-photo]")
-        live_video_node = live_photo.locator("video")
-        live_video_node.evaluate(
-            """video => {
-                window.__timelinePauseCount=0;
-                video.play=()=>Promise.resolve();
-                video.pause=()=>{window.__timelinePauseCount+=1};
-            }"""
-        )
         live_photo.click()
-        assert live_video_node.is_visible()
-        live_photo.click()
-        assert live_video_node.is_hidden()
-        page.evaluate("window.__timelinePauseCount=0")
-        live_photo.click()
-        assert live_video_node.is_visible()
+        assert page.locator("[data-media-lightbox]").is_visible()
+        assert page.locator("[data-lightbox-live-badge]").is_visible()
+        page.keyboard.press("Escape")
+        assert page.locator("[data-media-lightbox]").is_hidden()
         page.locator('[data-action="newer-window"]').click()
-        assert page.evaluate("window.__timelinePauseCount") == 1
         assert (
             page.evaluate("window.__WEISHUSHU_TIMELINE_TEST__.jump('2019-06')")
             == "2019-06"
@@ -478,9 +474,10 @@ def test_historical_window_keeps_detail_media_and_reading_position_offline(tmp_p
         page.keyboard.press("Escape")
         page.locator('[data-view="detail"] .comment-image-button').click()
         assert page.locator("[data-media-lightbox]").is_visible()
-        assert page.locator("[data-lightbox-image]").get_attribute("src").endswith(
-            "media/early-comment.png"
+        lightbox_src = page.evaluate(
+            "decodeURIComponent(document.querySelector('[data-lightbox-image]').src)"
         )
+        assert lightbox_src.endswith("媒体/评论图片/early-comment.png")
         page.keyboard.press("Escape")
         page.go_back()
         assert page.locator('[data-view="feed"]').is_visible()
@@ -494,4 +491,33 @@ def test_historical_window_keeps_detail_media_and_reading_position_offline(tmp_p
         assert page.locator(f'[data-bid="{target}"]').count() == 0
         assert errors == []
         assert not any(url.startswith(("http://", "https://")) for url in requests)
+        browser.close()
+
+
+def test_initial_load_stays_at_page_top(tmp_path):
+    """初始加载不自动滚动：封面与资料区保持在视口顶部（2026-09-07 用户实锤修复）。"""
+    from playwright.sync_api import sync_playwright
+
+    from weibo_book.archive.render_snapshot import ArchiveRenderer
+
+    repository, root = _repo(tmp_path)
+    for index in range(120):
+        repository.upsert_post(
+            _post(f"P{index:04d}", f"2026-07-{(index % 28) + 1:02d}T08:00:00+09:00")
+        )
+    ArchiveRenderer(repository).render_all(
+        root, render_pdf=lambda _html, pdf: pdf.write_bytes(b"pdf")
+    )
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto((root / "微博书.html").resolve().as_uri(), wait_until="load")
+        page.wait_for_function("window.__WEISHUSHU_PRINT_READY__ === true")
+        assert page.evaluate("window.scrollY") == 0
+        # 用户主动点「最新」窗口按钮时仍然滚动对齐
+        page.evaluate("window.scrollTo(0, 300)")
+        page.locator('[data-action="older-window"]').click()
+        page.locator('[data-action="latest-window"]').click()
+        assert page.evaluate("window.scrollY") > 0
         browser.close()

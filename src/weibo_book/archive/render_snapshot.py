@@ -24,11 +24,19 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from weibo_book.errors import OperationCancelled, OperationPaused
 
 from .media_layout import media_path_shape
+from .paths import ArchivePaths
+from .profile_assets import profile_asset_identity
+from .video_playback import video_quality_score
 from .presentation import format_archive_time, normalize_archive_text
 from .repository import ArchiveError, ArchiveRepository
 
 logger = logging.getLogger(__name__)
 _PDF_PRINT_BATCH_SIZE = 50
+HLS_LIBRARY_NAME = "hls.min.js"
+# 互动 HTML 版式号：V1 = v1.x 旧索引档案；V2 = v2.0.0/v2.0.1；V3 = v2.1.0（含搜索与超话页签）；
+# V4 = v2.2.0（合并导航与桌面三栏）。只升不降；每次互动模板能力变化在发布时递增。
+BOOK_FORMAT_VERSION = 4
+BOOK_FORMAT_META_KEY = "book_format_version"
 _ARCHIVE_MONTH = re.compile(
     r"^(?P<year>\d{4})-(?P<month>0[1-9]|1[0-2])-\d{2} \d{2}:\d{2}$"
 )
@@ -61,9 +69,9 @@ def _combined_control(
 
 
 @contextmanager
-def _open_archive_media(archive_root: Path, local_path: str):
-    """在归档根目录内打开非链接普通媒体文件。"""
-    physical_root = archive_root.resolve(strict=True)
+def _open_archive_media(media_base: Path, local_path: str):
+    """在归档媒体基准目录内打开非链接普通媒体文件。"""
+    physical_root = media_base.resolve(strict=True)
     parts = PurePosixPath(_safe_local_path(local_path)).parts
     directory_descriptors: list[int] = []
     descriptor: int | None = None
@@ -227,8 +235,10 @@ def _safe_local_path(value: str) -> str:
     return path.as_posix()
 
 
-def _browser_url(value: str) -> str:
+def _browser_url(value: str, prefix: str = "") -> str:
     path = _safe_local_path(value)
+    if prefix:
+        path = prefix + path
     return "/".join(quote(segment, safe="-._~") for segment in path.split("/"))
 
 
@@ -272,8 +282,11 @@ def _local(payload: dict, key: str) -> str:
     return _safe_local_path(value) if isinstance(value, str) and value else ""
 
 
-def _project_link(payload: object) -> dict | None:
+def _project_link(payload: object, prefix: str = "") -> dict | None:
     if not isinstance(payload, dict):
+        return None
+    if _text(payload, "type") in ("topic", "search_topic"):
+        # 话题页卡片不渲染（微博正文中的 #话题# 本身已足够表达）
         return None
     external = ""
     for key in ("url", "original_url"):
@@ -287,13 +300,13 @@ def _project_link(payload: object) -> dict | None:
         "description": _text(payload, "description"),
         "url": external,
         "local_image": _local(payload, "local_image"),
-        "browser_url": _browser_url(_local(payload, "local_image"))
+        "browser_url": _browser_url(_local(payload, "local_image"), prefix)
         if _local(payload, "local_image") else "",
     }
     return result
 
 
-def _project_payload_media(payload: object) -> list[dict]:
+def _project_payload_media(payload: object, prefix: str = "") -> list[dict]:
     if not isinstance(payload, list):
         return []
     result = []
@@ -307,34 +320,34 @@ def _project_payload_media(payload: object) -> list[dict]:
         local_thumb = _local(item, "local_thumb")
         video_cover = _local(item, "video_cover")
         if kind == "image" and local_path:
-            result.append({"kind": "image", "position": position, "local_path": local_path, "browser_url": _browser_url(local_path)})
+            result.append({"kind": "image", "position": position, "local_path": local_path, "browser_url": _browser_url(local_path, prefix)})
         elif kind == "video" and local_path:
             result.append({
                 "kind": "video", "position": position,
-                "local_path": local_path, "browser_url": _browser_url(local_path),
+                "local_path": local_path, "browser_url": _browser_url(local_path, prefix),
                 "cover_path": video_cover or local_thumb,
-                "cover_url": _browser_url(video_cover or local_thumb) if video_cover or local_thumb else "",
+                "cover_url": _browser_url(video_cover or local_thumb, prefix) if video_cover or local_thumb else "",
             })
         elif kind == "live_photo" and local_path and local_thumb:
             result.append({
                 "kind": "live_photo", "position": position,
-                "video_path": local_path, "video_url": _browser_url(local_path),
-                "image_path": local_thumb, "image_url": _browser_url(local_thumb),
+                "video_path": local_path, "video_url": _browser_url(local_path, prefix),
+                "image_path": local_thumb, "image_url": _browser_url(local_thumb, prefix),
             })
         elif kind == "live_photo" and local_path:
             result.append({
                 "kind": "video", "position": position,
-                "local_path": local_path, "browser_url": _browser_url(local_path),
-                "cover_path": video_cover, "cover_url": _browser_url(video_cover) if video_cover else "",
+                "local_path": local_path, "browser_url": _browser_url(local_path, prefix),
+                "cover_path": video_cover, "cover_url": _browser_url(video_cover, prefix) if video_cover else "",
             })
         elif kind == "live_photo" and local_thumb:
-            result.append({"kind": "image", "position": position, "local_path": local_thumb, "browser_url": _browser_url(local_thumb)})
+            result.append({"kind": "image", "position": position, "local_path": local_thumb, "browser_url": _browser_url(local_thumb, prefix)})
         elif kind:
             result.append({"kind": "unavailable", "position": position})
     return result
 
 
-def _project_retweeted(payload: object) -> dict | None:
+def _project_retweeted(payload: object, prefix: str = "") -> dict | None:
     if not isinstance(payload, dict):
         return None
     return {
@@ -349,12 +362,12 @@ def _project_retweeted(payload: object) -> dict | None:
         "reposts_count": _count(payload, "reposts_count"),
         "comments_count": _count(payload, "comments_count"),
         "likes_count": _count(payload, "likes_count"),
-        "link_card": _project_link(payload.get("link_card")),
-        "media": _project_payload_media(payload.get("media")),
+        "link_card": _project_link(payload.get("link_card"), prefix),
+        "media": _project_payload_media(payload.get("media"), prefix),
     }
 
 
-def _project_post_payload(payload: dict) -> dict:
+def _project_post_payload(payload: dict, prefix: str = "") -> dict:
     pin_order = payload.get("pin_order")
     result = {
         "bid": _text(payload, "bid"),
@@ -369,10 +382,10 @@ def _project_post_payload(payload: dict) -> dict:
         "reposts_count": _count(payload, "reposts_count"),
         "comments_count": _count(payload, "comments_count"),
         "likes_count": _count(payload, "likes_count"),
-        "retweeted_payload": _project_retweeted(payload.get("retweeted_payload")),
-        "link_card_payload": _project_link(payload.get("link_card_payload")),
+        "retweeted_payload": _project_retweeted(payload.get("retweeted_payload"), prefix),
+        "link_card_payload": _project_link(payload.get("link_card_payload"), prefix),
     }
-    result["media"] = _project_payload_media(payload.get("media_signature"))
+    result["media"] = _project_payload_media(payload.get("media_signature"), prefix)
     return result
 
 
@@ -398,10 +411,30 @@ class ArchiveRenderSnapshot:
     posts: tuple[dict, ...]
     timeline: dict
     following: dict | None
+    avatar_history: tuple = ()
+    cover_history: tuple = ()
+    pin_history: tuple = ()
+    fans_history: tuple = ()
 
     @classmethod
-    def from_repository(cls, repository: ArchiveRepository) -> "ArchiveRenderSnapshot":
+    def from_repository(cls, repository: ArchiveRepository, progress_callback=None) -> "ArchiveRenderSnapshot":
+        prefix = repository.paths.browser_url_prefix
+        from .supertopic import STATE_KEY
+        topic_state = repository._read_meta(STATE_KEY)
+        topic_state = topic_state if isinstance(topic_state, dict) else {}
+        topic_names = {x["id"]: x["name"] for x in topic_state.get("sources", [])
+                       if isinstance(x, dict) and isinstance(x.get("id"), str) and isinstance(x.get("name"), str)}
+        topic_origins = topic_state.get("post_sources", {})
+        topic_origins = topic_origins if isinstance(topic_origins, dict) else {}
+        exclusive_state = topic_state.get("exclusive_bids", [])
+        exclusive_bids = ({bid for bid in exclusive_state if isinstance(bid, str)}
+                          if isinstance(exclusive_state, list) else set())
         posts = repository.list_posts_for_render()
+        profile_assets = repository.list_profile_assets()
+        pin_observations = repository.list_pin_observations()
+        current_pin_bids = (
+            repository.latest_pin_bids() if pin_observations else None
+        )
         comments = repository.list_comments_for_render()
         media = repository.list_media_for_render()
         revisions_by_post = repository.list_revisions_for_render()
@@ -413,7 +446,7 @@ class ArchiveRenderSnapshot:
         def avatar_for(owner_type: str, owner_id: str) -> str:
             for item in media_by_owner.get((owner_type, owner_id), []):
                 if item.role == "avatar":
-                    return _browser_url(item.local_path)
+                    return _browser_url(item.local_path, prefix)
             return ""
         for comment in comments:
             payload = _project_comment(comment.payload)
@@ -424,29 +457,69 @@ class ArchiveRenderSnapshot:
             payload["media"] = [
                 {"kind": item.role, "position": item.position,
                  "local_path": _safe_local_path(item.local_path),
-                 "browser_url": _browser_url(item.local_path)}
+                 "browser_url": _browser_url(item.local_path, prefix)}
                 for item in media_by_owner.get(("comment", comment.id), [])
             ]
             comments_by_post.setdefault(comment.post_bid, []).append(payload)
 
         rendered: list[tuple[int, dict]] = []
+        if progress_callback is not None:
+            progress_callback(0, len(posts))
         for stable_index, post in enumerate(posts):
-            raw = _project_post_payload(asdict(post))
+            raw = _project_post_payload(asdict(post), prefix)
+            origins = topic_origins.get(post.bid, [])
+            if isinstance(origins, list):
+                topics = [{"id": key, "name": topic_names[key]} for key in origins if isinstance(key, str) and key in topic_names]
+                if topics:
+                    raw["supertopics"] = topics
+            if post.bid in exclusive_bids:
+                raw["supertopic_exclusive"] = True
+            if current_pin_bids is not None:
+                raw["is_pinned"] = post.bid in current_pin_bids
             if raw["retweeted_payload"] is not None:
                 raw["retweeted_payload"]["avatar_url"] = avatar_for(
                     "retweeted_user", raw["retweeted_payload"]["uid"]
                 )
             raw["comments"] = comments_by_post.get(post.bid, [])
-            raw["media"] = _post_media(media_by_owner.get(("post", post.bid), []))
+            post_media = media_by_owner.get(("post", post.bid), [])
+            # 提取层历史版本可能把同一视频声明两次（URL 升级后绕过去重）；
+            # 内容哈希相同的视频只展示一份，存量档案重渲染即修复。
+            seen_video_sha: set[str] = set()
+            deduped_media = []
+            for item in post_media:
+                if item.role == "video":
+                    key = item.sha256 or item.local_path
+                    if key in seen_video_sha:
+                        continue
+                    seen_video_sha.add(key)
+                deduped_media.append(item)
+            post_media = deduped_media
+            if sum(item.get("type") == "video" for item in post.media_signature) == 1:
+                # 旧补抓曾将同一视频写入不同位置；只展示单视频声明的最高画质副本。
+                videos = [item for item in post_media if item.role == "video"]
+                if len(videos) > 1:
+                    best = max(videos, key=lambda item: video_quality_score(item.remote_url))
+                    post_media = [item for item in post_media
+                                  if item.role != "video" or item is best]
+            raw["media"] = _post_media(post_media, prefix)
+            link_payload = raw.get("link_card_payload")
+            if isinstance(link_payload, dict) and link_payload.get("browser_url"):
+                for item in raw["media"]:
+                    if isinstance(item, dict) and item.get("hls") and not item["cover_url"]:
+                        # 直播回放视频用直播卡片的本地封面做海报
+                        item["cover_url"] = link_payload["browser_url"]
+                        item["cover_path"] = link_payload.get("local_image", "")
             raw["revisions"] = [
                 {
                     "revision_no": revision.revision_no,
                     "captured_at": revision.captured_at,
-                    "payload": _project_post_payload(revision.payload),
+                    "payload": _project_post_payload(revision.payload, prefix),
                 }
                 for revision in revisions_by_post.get(post.bid, [])
             ]
             rendered.append((stable_index, raw))
+            if progress_callback is not None and ((stable_index + 1) % 100 == 0 or stable_index + 1 == len(posts)):
+                progress_callback(stable_index + 1, len(posts))
 
         def sort_key(item):
             stable_index, post = item
@@ -459,8 +532,41 @@ class ArchiveRenderSnapshot:
 
         rendered.sort(key=sort_key)
         ordered_posts = [item[1] for item in rendered]
-        timeline = _build_timeline_index(ordered_posts)
+        # 时间目录只覆盖主流微博；超话独占微博在互动页单独页签展示，索引序号与前端过滤后保持一致。
+        timeline = _build_timeline_index(
+            [post for post in ordered_posts if post.get("supertopic_exclusive") is not True]
+        )
         manifest = repository.manifest()
+        avatar_history = _asset_history(profile_assets, "avatar", prefix, repository.get_current_profile_asset("avatar"))
+        cover_history = _asset_history(profile_assets, "cover", prefix, repository.get_current_profile_asset("cover"))
+        pin_batches: list[dict] = []
+        for observation in pin_observations:
+            if pin_batches and pin_batches[-1]["observed_at"] == observation.observed_at:
+                pin_batches[-1]["bids"].append(observation.bid)
+            else:
+                pin_batches.append(
+                    {"observed_at": observation.observed_at, "bids": [observation.bid]}
+                )
+        pin_history: list[dict] = []
+        for batch in pin_batches:
+            if pin_history and set(pin_history[-1]["bids"]) == set(batch["bids"]):
+                # 与上一次备份的置顶相同则不重复记录，只保留有变化的分批
+                continue
+            pin_history.append(batch)
+        fans_history: list[dict] = []
+        for observation in repository.list_fans_observations():
+            if (
+                fans_history
+                and fans_history[-1]["followers_count"] == observation.followers_count
+            ):
+                # 与上一次备份数值相同则不重复展示，保留最新一条观察时间
+                continue
+            fans_history.append(
+                {
+                    "observed_at": observation.observed_at,
+                    "followers_count": observation.followers_count,
+                }
+            )
         return cls(
             schema=1,
             user=_freeze({
@@ -468,21 +574,51 @@ class ArchiveRenderSnapshot:
                 "screen_name": manifest.screen_name,
                 "created_at": manifest.created_at,
                 "last_successful_sync_at": manifest.last_successful_sync_at,
-                "avatar_url": avatar_for("user", manifest.uid),
+                "avatar_url": next((item["url"] for item in avatar_history if item["current"]), avatar_for("user", manifest.uid)),
+                "cover_url": next((item["url"] for item in cover_history if item["current"]), ""),
+                "followers_count": (
+                    fans_history[0]["followers_count"] if fans_history else None
+                ),
             }),
             posts=tuple(_freeze(post) for post in ordered_posts),
             timeline=_freeze(timeline),
             following=_project_following(repository),
+            avatar_history=_freeze(avatar_history),
+            cover_history=_freeze(cover_history),
+            pin_history=_freeze(pin_history),
+            fans_history=_freeze(fans_history),
         )
 
     def payload(self) -> dict:
         return {
             "schema": self.schema,
+            "format_version": BOOK_FORMAT_VERSION,
             "user": self.user,
             "posts": list(self.posts),
             "timeline": self.timeline,
             "following": self.following,
+            "avatar_history": self.avatar_history,
+            "cover_history": self.cover_history,
+            "pin_history": self.pin_history,
+            "fans_history": self.fans_history,
         }
+
+
+def _asset_history(assets, kind: str, prefix: str, current_url: str = "") -> list[dict]:
+    """旧行按图片身份合并，保留最早时间；当前标记只依据资料接口记录。"""
+    grouped = {}
+    for asset in sorted(assets, key=lambda item: item.first_seen_at):
+        if asset.kind != kind:
+            continue
+        identity = profile_asset_identity(asset.remote_url)
+        item = grouped.setdefault(identity, {
+            "url": "", "first_seen_at": asset.first_seen_at,
+            "current": bool(current_url) and identity == profile_asset_identity(current_url),
+        })
+        if not item["url"] and asset.local_path:
+            item["url"] = _browser_url(_safe_local_path(asset.local_path), prefix)
+    return sorted((item for item in grouped.values() if item["url"]),
+                  key=lambda item: item["first_seen_at"], reverse=True)
 
 
 def _project_following(repository: ArchiveRepository) -> dict | None:
@@ -568,41 +704,51 @@ def _project_following(repository: ArchiveRepository) -> dict | None:
     })
 
 
-def _post_media(records) -> list[dict]:
+def _post_media(records, prefix: str = "") -> list[dict]:
     grouped: dict[int, dict[str, object]] = {}
     for record in records:
+        if record.role == "live_replay_segment":
+            # 直播回放的 ts 分段只用于防止无引用清理，不参与渲染
+            continue
         grouped.setdefault(record.position, {})[record.role] = record
     result = []
     for position in sorted(grouped):
         roles = grouped[position]
-        if "live_photo" in roles and "live_photo_thumbnail" in roles:
+        if "live_replay" in roles:
+            replay = roles["live_replay"]
+            result.append({
+                "kind": "video", "position": position, "hls": True,
+                "local_path": _safe_local_path(replay.local_path), "browser_url": _browser_url(replay.local_path, prefix),
+                "cover_path": "", "cover_url": "",
+            })
+        elif "live_photo" in roles and "live_photo_thumbnail" in roles:
             video = roles["live_photo"]
             image = roles["live_photo_thumbnail"]
             result.append({
                 "kind": "live_photo", "position": position,
-                "image_path": _safe_local_path(image.local_path), "image_url": _browser_url(image.local_path),
-                "video_path": _safe_local_path(video.local_path), "video_url": _browser_url(video.local_path),
+                "image_path": _safe_local_path(image.local_path), "image_url": _browser_url(image.local_path, prefix),
+                "video_path": _safe_local_path(video.local_path), "video_url": _browser_url(video.local_path, prefix),
             })
         elif "live_photo" in roles:
             video = roles["live_photo"]
             result.append({
                 "kind": "video", "position": position,
-                "local_path": _safe_local_path(video.local_path), "browser_url": _browser_url(video.local_path), "cover_path": "", "cover_url": "",
+                "local_path": _safe_local_path(video.local_path), "browser_url": _browser_url(video.local_path, prefix), "cover_path": "", "cover_url": "",
             })
         elif "live_photo_thumbnail" in roles:
             image = roles["live_photo_thumbnail"]
             result.append({
                 "kind": "image", "position": position,
-                "local_path": _safe_local_path(image.local_path), "browser_url": _browser_url(image.local_path),
+                "local_path": _safe_local_path(image.local_path), "browser_url": _browser_url(image.local_path, prefix),
             })
         elif "video" in roles:
             video = roles["video"]
             cover = roles.get("video_cover") or roles.get("video_thumbnail")
             result.append({
                 "kind": "video", "position": position,
-                "local_path": _safe_local_path(video.local_path), "browser_url": _browser_url(video.local_path),
+                "local_path": _safe_local_path(video.local_path), "browser_url": _browser_url(video.local_path, prefix),
                 "cover_path": _safe_local_path(cover.local_path) if cover else "",
-                "cover_url": _browser_url(cover.local_path) if cover else "",
+                "cover_url": _browser_url(cover.local_path, prefix) if cover else "",
             })
         elif "image" in roles:
             image = roles["image"]
@@ -610,31 +756,87 @@ def _post_media(records) -> list[dict]:
             result.append({
                 "kind": "image", "position": position,
                 "local_path": _safe_local_path(image.local_path),
-                "browser_url": _browser_url(image.local_path),
+                "browser_url": _browser_url(image.local_path, prefix),
                 "thumbnail_path": _safe_local_path(thumbnail.local_path) if thumbnail else "",
-                "thumbnail_url": _browser_url(thumbnail.local_path) if thumbnail else "",
+                "thumbnail_url": _browser_url(thumbnail.local_path, prefix) if thumbnail else "",
             })
     return result
+
+
+def _snapshot_needs_hls(snapshot: ArchiveRenderSnapshot) -> bool:
+    """快照里是否有 HLS 直播回放媒体（决定是否在 HTML 里引入 hls.js）。"""
+    for post in snapshot.posts:
+        media = post.get("media") if isinstance(post, dict) else None
+        if isinstance(media, (list, tuple)) and any(
+            isinstance(item, dict) and item.get("hls") for item in media
+        ):
+            return True
+    return False
 
 
 class ArchiveRenderer:
     def __init__(self, repository: ArchiveRepository):
         self.repository = repository
+        self._progress_callback = None
+        from .performance import PerformanceTimings
+        self._timings = PerformanceTimings()
         template_dir = Path(__file__).resolve().parents[1] / "templates"
         self.env = Environment(
             loader=FileSystemLoader(template_dir),
             autoescape=select_autoescape(("html",)),
         )
 
+    def _progress(self, subphase, detail, current=0, total=None, unit="file"):
+        if self._progress_callback is not None:
+            self._progress_callback({
+                "phase": "generate", "subphase": subphase, "pct": 0.96,
+                "detail": detail, "current": current, "total": total, "unit": unit,
+                "timings_seconds": self._timings.snapshot(),
+            })
+
     def _render_html(self, snapshot: ArchiveRenderSnapshot) -> str:
+        hls_script_src = None
+        if _snapshot_needs_hls(snapshot):
+            data_script_src = self.repository.paths.data_script_src
+            hls_script_src = "/".join(
+                [*data_script_src.split("/")[:-1], HLS_LIBRARY_NAME]
+            )
         return self.env.get_template("book_interactive.html").render(
-            archive_mode=True, snapshot=snapshot
+            archive_mode=True,
+            snapshot=snapshot,
+            archive_data_src=self.repository.paths.data_script_src,
+            hls_script_src=hls_script_src,
+            book_format_version=BOOK_FORMAT_VERSION,
         )
 
     def _render_print_html(self, snapshot: ArchiveRenderSnapshot) -> str:
         return self.env.get_template("book.html").render(
             archive_mode=True, snapshot=snapshot
         )
+
+    @staticmethod
+    def _install_hls_library(target: Path) -> None:
+        """把随包 hls.js 复制到归档数据目录（内容固定，存在且一致则跳过）。"""
+        source = Path(__file__).resolve().parents[1] / "templates" / HLS_LIBRARY_NAME
+        try:
+            marker = target.lstat()
+            if stat.S_ISLNK(marker.st_mode) or not stat.S_ISREG(marker.st_mode):
+                raise ArchiveError("hls.js 安装目标不安全")
+            if marker.st_size == source.stat().st_size:
+                return
+        except FileNotFoundError:
+            pass
+        temporary = target.with_name(f".{HLS_LIBRARY_NAME}.{secrets.token_hex(4)}.tmp")
+        try:
+            with source.open("rb") as reader, temporary.open("xb") as writer:
+                for block in iter(lambda: reader.read(1024 * 1024), b""):
+                    writer.write(block)
+            os.replace(temporary, target)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
     @staticmethod
     def _render_markdown(snapshot: ArchiveRenderSnapshot) -> str:
@@ -656,13 +858,15 @@ class ArchiveRenderer:
     def _print_data_source(
         cls,
         snapshot: ArchiveRenderSnapshot,
-        archive_root: Path,
+        layout: ArchivePaths,
         stage: Path,
         cancel_requested: Callable[[], bool] | None,
     ) -> str:
         """为 PDF 生成本地缩略图数据，避免 Chromium 解码全部原图。"""
         from PIL import Image, ImageOps
 
+        prefix = layout.browser_url_prefix
+        media_base = layout.assets_dir
         payload = json.loads(json.dumps(snapshot.payload(), ensure_ascii=False))
         thumbnail_dir = stage / "print-media"
         thumbnail_dir.mkdir()
@@ -675,10 +879,13 @@ class ArchiveRenderer:
             if browser_url in cache:
                 return cache[browser_url]
             try:
-                local_path = _safe_local_path(unquote(browser_url))
+                raw = unquote(browser_url)
+                if prefix and raw.startswith(prefix):
+                    raw = raw[len(prefix):]
+                local_path = _safe_local_path(raw)
                 digest = hashlib.sha256(local_path.encode("utf-8")).hexdigest()[:24]
                 target = thumbnail_dir / f"{digest}.jpg"
-                with _open_archive_media(archive_root, local_path) as stream:
+                with _open_archive_media(media_base, local_path) as stream:
                     with Image.open(stream) as opened:
                         image = ImageOps.exif_transpose(opened)
                         image.thumbnail((640, 640), Image.Resampling.LANCZOS)
@@ -755,7 +962,14 @@ class ArchiveRenderer:
         cancel_requested: Callable[[], bool] | None = None,
         pause_requested: Callable[[], bool] | None = None,
         begin_commit: Callable[[], bool] | None = None,
+        include_pdf: bool = True,
+        include_markdown: bool = True,
+        progress_callback=None,
+        timings=None,
     ) -> dict[str, Path]:
+        self._progress_callback = progress_callback
+        if timings is not None:
+            self._timings = timings
         root = Path(root)
         repository_root = self.repository.root_path()
         if (
@@ -764,30 +978,51 @@ class ArchiveRenderer:
             or root.absolute() != repository_root.absolute()
         ):
             raise ArchiveError("渲染目录必须是当前归档根目录且不能是符号链接")
-        data_dir = root / "data"
+        layout = self.repository.paths
+        data_dir = layout.data_dir
         data_dir.mkdir(parents=True, exist_ok=True)
         self._validate_render_paths(root, data_dir, {})
         paths = {
-            "html": root / "微博书.html", "pdf": root / "微博书.pdf",
-            "markdown": root / "微博书.md", "data": data_dir / "archive-data.js",
+            "html": layout.html_path,
+            "data": layout.archive_data_path,
         }
-        journal = self._journal_path(root)
+        # PDF/Markdown 跳过时保持既有文件不动：不产出、不删除、不校验
+        ordered: dict[str, Path] = {"html": paths["html"]}
+        if include_pdf:
+            ordered["pdf"] = layout.pdf_path
+        if include_markdown:
+            ordered["markdown"] = layout.markdown_path
+        ordered["data"] = paths["data"]
+        paths = ordered
+        journal = layout.render_journal_path
         control_requested = _combined_control(cancel_requested, pause_requested)
-        with self._render_lock(root):
+        with self._render_lock(layout):
             _check_cancelled(control_requested)
-            self._recover_render(journal, root)
+            self._recover_render(journal, layout)
             self._cleanup_orphan_stages(data_dir)
-            self._cleanup_restore_temps(root)
+            self._cleanup_restore_temps(layout)
             rendered = self._render_locked(
-                root, data_dir, paths, journal, render_pdf, control_requested,
-                begin_commit,
+                root, layout, data_dir, paths, journal, render_pdf,
+                control_requested, begin_commit, include_pdf, include_markdown,
             )
+            self.repository._write_meta(BOOK_FORMAT_META_KEY, BOOK_FORMAT_VERSION)
             try:
                 from .media_cleanup import cleanup_unreferenced_media
 
-                removed = cleanup_unreferenced_media(
-                    root, self.repository.list_media_for_render()
-                )
+                with self._timings.measure("cleanup"):
+                    self._progress("cleanup", "正在检查归档媒体引用", unit="media")
+                    removed = cleanup_unreferenced_media(
+                        layout,
+                        self.repository.list_media_for_render(),
+                        (
+                            asset.local_path
+                            for asset in self.repository.list_profile_assets()
+                            if asset.local_path
+                        ),
+                        progress_callback=lambda current, total: self._progress(
+                            "cleanup", "正在检查归档媒体引用", current, total, "media"
+                        ),
+                    )
                 if removed:
                     logger.info("已清理 %d 个无引用媒体文件", len(removed))
             except ArchiveError as exc:
@@ -795,11 +1030,17 @@ class ArchiveRenderer:
             return rendered
 
     def _render_locked(
-        self, root, data_dir, paths, journal, render_pdf, cancel_requested,
-        begin_commit,
+        self, root, layout, data_dir, paths, journal, render_pdf,
+        cancel_requested, begin_commit, include_pdf, include_markdown=True,
     ):
         _check_cancelled(cancel_requested)
-        snapshot = ArchiveRenderSnapshot.from_repository(self.repository)
+        with self._timings.measure("generate"):
+            self._progress("snapshot", "正在读取档案并整理页面数据", unit="post")
+            snapshot = ArchiveRenderSnapshot.from_repository(
+                self.repository, progress_callback=lambda current, total: self._progress(
+                    "snapshot", "正在整理微博与媒体索引", current, total, "post"
+                )
+            )
         stage = Path(tempfile.mkdtemp(prefix=".render-stage-", dir=data_dir))
         staged = {
             "html": stage / "微博书.html",
@@ -825,54 +1066,73 @@ class ArchiveRenderer:
         cleanup = False
         self._write_journal(journal, state)
         try:
-            contents = {
-                "html": self._render_html(snapshot),
-                "print_html": self._render_print_html(snapshot),
-                "markdown": self._render_markdown(snapshot),
-                "data": self._data_source(snapshot),
-            }
-            for key in ("html", "markdown", "data"):
-                self._write_file(staged[key], contents[key].encode("utf-8"))
-            print_data = self._print_data_source(
-                snapshot, root, stage, cancel_requested
-            )
-            self._write_file(staged["print_data"], print_data.encode("utf-8"))
-            print_source = self._print_html_source(
-                contents["print_html"], root.resolve(), staged["print_data"].resolve()
-            )
-            self._write_file(staged["print_html"], print_source.encode("utf-8"))
-            staged["pdf"].parent.mkdir(parents=True, exist_ok=True)
-            if render_pdf is None:
-                self._default_pdf(
-                    staged["print_html"], staged["pdf"], root,
-                    len(snapshot.posts), cancel_requested,
-                )
-            else:
-                render_pdf(staged["print_html"], staged["pdf"])
-            _check_cancelled(cancel_requested)
-            if not staged["pdf"].is_file() or staged["pdf"].stat().st_size == 0:
-                raise ArchiveError("PDF 渲染未生成有效文件")
-            self._fsync_file(staged["pdf"])
-
-            state["phase"] = "backing_up"
-            self._write_journal(journal, state)
-            for key, target in paths.items():
-                if had_original[key]:
-                    backups[key].parent.mkdir(parents=True, exist_ok=True)
-                    self._copy_fsync(target, backups[key])
-            self._fsync_directory(backups["html"].parent)
-            self._fsync_directory(root)
-            self._fsync_directory(data_dir)
-            state["phase"] = "publishing"
-            self._write_journal(journal, state)
-            for key, target in paths.items():
+            if _snapshot_needs_hls(snapshot):
+                # hls.js 是静态库，内容固定，不进原子发布集；回滚残留的
+                # 副本无害（旧 HTML 不引用它），下次渲染会覆盖为同一内容。
+                self._install_hls_library(paths["data"].parent / HLS_LIBRARY_NAME)
+            contents = {}
+            generators = [("html", "互动 HTML", self._render_html), ("data", "离线数据", self._data_source)]
+            if include_markdown:
+                generators.append(("markdown", "Markdown", self._render_markdown))
+            file_total = len(paths)
+            for index, (key, label, generate) in enumerate(generators):
                 _check_cancelled(cancel_requested)
-                self._validate_render_paths(root, data_dir, paths)
-                os.replace(staged[key], target)
-                published.append(key)
-                state["published"] = list(published)
+                with self._timings.measure("generate"):
+                    self._progress(key, f"正在生成{label}", index, file_total)
+                    contents[key] = generate(snapshot)
+                    self._write_file(staged[key], contents[key].encode("utf-8"))
+                    self._progress(key, f"{label}已生成", index + 1, file_total)
+            with self._timings.measure("generate"):
+                if include_pdf:
+                    self._progress("pdf", "正在准备 PDF 排版与图片", len(generators), file_total)
+                    contents["print_html"] = self._render_print_html(snapshot)
+                    print_data = self._print_data_source(
+                        snapshot, layout, stage, cancel_requested
+                    )
+                    self._write_file(staged["print_data"], print_data.encode("utf-8"))
+                    print_source = self._print_html_source(
+                        contents["print_html"], root.resolve(), staged["print_data"].resolve()
+                    )
+                    self._write_file(staged["print_html"], print_source.encode("utf-8"))
+                    staged["pdf"].parent.mkdir(parents=True, exist_ok=True)
+                    if render_pdf is None:
+                        self._default_pdf(
+                            staged["print_html"], staged["pdf"], root,
+                            len(snapshot.posts), cancel_requested,
+                            progress_callback=lambda current, total: self._progress(
+                                "pdf", "正在生成 PDF 分批页面", current, total, "batch"
+                            ),
+                        )
+                    else:
+                        render_pdf(staged["print_html"], staged["pdf"])
+                    _check_cancelled(cancel_requested)
+                    if not staged["pdf"].is_file() or staged["pdf"].stat().st_size == 0:
+                        raise ArchiveError("PDF 渲染未生成有效文件")
+                    self._fsync_file(staged["pdf"])
+
+            with self._timings.measure("publish"):
+                self._progress("publish", "正在备份已有成品文件", 0, len(paths))
+                state["phase"] = "backing_up"
                 self._write_journal(journal, state)
-                self._fsync_directory(target.parent)
+                for key, target in paths.items():
+                    if had_original[key]:
+                        backups[key].parent.mkdir(parents=True, exist_ok=True)
+                        self._copy_fsync(target, backups[key])
+                self._fsync_directory(backups["html"].parent)
+                self._fsync_directory(root)
+                self._fsync_directory(data_dir)
+                state["phase"] = "publishing"
+                self._write_journal(journal, state)
+                for index, (key, target) in enumerate(paths.items()):
+                    self._progress("publish", "正在安全写入成品文件", index, len(paths))
+                    _check_cancelled(cancel_requested)
+                    self._validate_render_paths(root, data_dir, paths)
+                    os.replace(staged[key], target)
+                    published.append(key)
+                    state["published"] = list(published)
+                    self._write_journal(journal, state)
+                    self._fsync_directory(target.parent)
+                    self._progress("publish", "成品文件已写入", index + 1, len(paths))
             self._validate_render_paths(root, data_dir, paths)
             _check_cancelled(cancel_requested)
             if begin_commit is not None and not begin_commit():
@@ -882,11 +1142,13 @@ class ArchiveRenderer:
             self._write_journal(journal, state)
             self._fsync_directory(root)
             self._fsync_directory(data_dir)
+            from .readme import ensure_archive_readme
+            ensure_archive_readme(root)
             cleanup = True
             return paths
         except BaseException:
             try:
-                self._rollback_state(state, root, journal)
+                self._rollback_state(state, layout, journal)
             except BaseException:
                 logger.exception("归档渲染发布回滚失败，已保留恢复状态")
                 raise
@@ -901,14 +1163,10 @@ class ArchiveRenderer:
                 except FileNotFoundError:
                     pass
 
-    @staticmethod
-    def _journal_path(root: Path) -> Path:
-        return root / "data" / ".weishushu-render-state.json"
-
     @classmethod
     @contextmanager
-    def _render_lock(cls, root: Path):
-        lock_path = root / "data" / ".weishushu-render.lock"
+    def _render_lock(cls, layout: ArchivePaths):
+        lock_path = layout.render_lock_path
         flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(lock_path, flags, 0o600)
         try:
@@ -942,7 +1200,7 @@ class ArchiveRenderer:
             except FileNotFoundError: pass
 
     @classmethod
-    def _recover_render(cls, journal: Path, root: Path) -> None:
+    def _recover_render(cls, journal: Path, layout: ArchivePaths) -> None:
         if not journal.exists():
             return
         try:
@@ -958,26 +1216,29 @@ class ArchiveRenderer:
             "stage", "had_original", "phase", "published", "restored",
         }
         keys = {"html", "pdf", "markdown", "data"}
+        had_original = state.get("had_original") if isinstance(state, dict) else None
         if (
             not isinstance(state, dict)
             or set(state) != required
             or not isinstance(state.get("stage"), str)
-            or not isinstance(state.get("had_original"), dict)
-            or set(state["had_original"]) != keys
-            or not all(isinstance(value, bool) for value in state["had_original"].values())
+            or not isinstance(had_original, dict)
+            or not had_original
+            or not set(had_original) <= keys
+            or not all(isinstance(value, bool) for value in had_original.values())
             or state.get("phase") not in {"staging", "backing_up", "publishing", "committed"}
             or not isinstance(state.get("published"), list)
             or not isinstance(state.get("restored"), list)
-            or any(value not in keys for value in state["published"])
-            or any(value not in keys for value in state["restored"])
+            or any(value not in had_original for value in state["published"])
+            or any(value not in had_original for value in state["restored"])
         ):
             raise ArchiveError("归档渲染恢复状态字段损坏")
-        data_dir = root / "data"
+        root = layout.root
+        data_dir = layout.data_dir
         stage_name = state["stage"]
         stage = data_dir / stage_name
         expected_targets = {
-            "html": root / "微博书.html", "pdf": root / "微博书.pdf",
-            "markdown": root / "微博书.md", "data": root / "data" / "archive-data.js",
+            "html": layout.html_path, "pdf": layout.pdf_path,
+            "markdown": layout.markdown_path, "data": layout.archive_data_path,
         }
         expected_backups = {
             "html": stage / "backup" / "微博书.html",
@@ -994,20 +1255,20 @@ class ArchiveRenderer:
         cls._validate_render_paths(root, data_dir, expected_targets)
         cls._validate_stage_paths(stage, state, expected_backups)
         if state.get("phase") not in {"committed", "staging", "backing_up"}:
-            cls._rollback_state(state, root, journal)
-        cls._cleanup_restore_temps(root)
+            cls._rollback_state(state, layout, journal)
+        cls._cleanup_restore_temps(layout)
         cls._remove_tree(stage)
         journal.unlink()
         cls._fsync_directory(journal.parent)
 
     @classmethod
-    def _rollback_state(cls, state: dict, root: Path, journal: Path) -> None:
+    def _rollback_state(cls, state: dict, layout: ArchivePaths, journal: Path) -> None:
         if state.get("phase") in {"staging", "backing_up"}:
             return
-        stage = root / "data" / state["stage"]
+        stage = layout.data_dir / state["stage"]
         targets = {
-            "html": root / "微博书.html", "pdf": root / "微博书.pdf",
-            "markdown": root / "微博书.md", "data": root / "data" / "archive-data.js",
+            "html": layout.html_path, "pdf": layout.pdf_path,
+            "markdown": layout.markdown_path, "data": layout.archive_data_path,
         }
         backups = {
             "html": stage / "backup" / "微博书.html",
@@ -1015,7 +1276,8 @@ class ArchiveRenderer:
             "markdown": stage / "backup" / "微博书.md",
             "data": stage / "backup" / "archive-data.js",
         }
-        for key, target in targets.items():
+        for key in state["had_original"]:
+            target = targets[key]
             staged_source = stage / (
                 "data/archive-data.js" if key == "data" else
                 {"html": "微博书.html", "pdf": "微博书.pdf", "markdown": "微博书.md"}[key]
@@ -1153,10 +1415,12 @@ class ArchiveRenderer:
             or not stat.S_ISDIR(staged_data_marker.st_mode)
         ):
             raise ArchiveError("归档渲染暂存 data 路径不安全")
-        staged = {
+        staged_all = {
             "html": stage / "微博书.html", "pdf": stage / "微博书.pdf",
             "markdown": stage / "微博书.md", "data": stage / "data" / "archive-data.js",
         }
+        staged = {key: staged_all[key] for key in state["had_original"]}
+        backups = {key: value for key, value in backups.items() if key in state["had_original"]}
         for key, path in {**staged, **{f"backup:{key}": value for key, value in backups.items()}}.items():
             try:
                 marker = os.lstat(path)
@@ -1178,12 +1442,13 @@ class ArchiveRenderer:
         cls._fsync_directory(data_dir)
 
     @classmethod
-    def _cleanup_restore_temps(cls, root: Path) -> None:
+    def _cleanup_restore_temps(cls, layout: ArchivePaths) -> None:
+        root = layout.root
         patterns = (
             (root, ".微博书.html.restore-*"),
             (root, ".微博书.pdf.restore-*"),
             (root, ".微博书.md.restore-*"),
-            (root / "data", ".archive-data.js.restore-*"),
+            (layout.data_dir, ".archive-data.js.restore-*"),
         )
         touched: set[Path] = set()
         for directory, pattern in patterns:
@@ -1202,7 +1467,7 @@ class ArchiveRenderer:
 
     @staticmethod
     def _validate_render_paths(root: Path, data_dir: Path, paths: dict) -> None:
-        for directory, label in ((root, "归档根目录"), (data_dir, "归档 data 目录")):
+        for directory, label in ((root, "归档根目录"), (data_dir, "归档数据目录")):
             marker = os.lstat(directory)
             if stat.S_ISLNK(marker.st_mode) or not stat.S_ISDIR(marker.st_mode):
                 raise ArchiveError(f"{label}必须是真实目录")
@@ -1290,6 +1555,7 @@ class ArchiveRenderer:
         archive_root: Path,
         post_count: int,
         cancel_requested: Callable[[], bool] | None = None,
+        progress_callback=None,
     ) -> None:
         from pypdf import PdfWriter
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -1308,7 +1574,9 @@ class ArchiveRenderer:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True)
                 try:
-                    for (start, limit), chunk in zip(batches, chunks, strict=True):
+                    for index, ((start, limit), chunk) in enumerate(zip(batches, chunks, strict=True)):
+                        if progress_callback is not None:
+                            progress_callback(index, len(batches))
                         _check_cancelled(cancel_requested)
                         page = browser.new_page()
                         failed_requests: list[str] = []
@@ -1356,6 +1624,8 @@ class ArchiveRenderer:
                         ArchiveRenderer._make_pdf_links_portable(
                             chunk, archive_root
                         )
+                        if progress_callback is not None:
+                            progress_callback(index + 1, len(batches))
                 finally:
                     browser.close()
 

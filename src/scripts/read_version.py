@@ -9,4 +9,4 @@ from pathlib import Path
 p = Path(__file__).resolve().parent.parent / "backend" / "app" / "version.py"
 src = p.read_text(encoding="utf-8")
 m = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', src)
-print(m.group(1) if m else "2.0.1")
+print(m.group(1) if m else "2.2.0")

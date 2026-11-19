@@ -421,3 +421,12 @@ def test_reconcile_after_process_start_marks_interrupted_work_waiting(tmp_path, 
     assert reconciled.state == "waiting_resume"
     assert reconciled.pause_reason == "unexpected_exit"
     assert store.load() == reconciled
+
+
+@pytest.mark.parametrize('limit',[0,10,50,'all'])
+def test_video_upgrade_choice_survives_persistent_record_roundtrip(tmp_path,limit):
+    from backend.app.services.persistent_task_store import PersistentTaskStore
+    store=PersistentTaskStore(tmp_path/'task.json')
+    record=_record(tmp_path,mode='incremental',checkpoint={'video_upgrade_limit':limit})
+    store.save(record)
+    assert store.load().checkpoint=={'video_upgrade_limit':limit}

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 from weibo_book.errors import WeiboError, WeiboErrorKind
+from weibo_book.archive.video_quality import valid_limit
 
 PersistentTaskState = Literal[
     "running",
@@ -26,7 +27,9 @@ PersistentTaskState = Literal[
     "cancelled",
     "abandoned",
 ]
-PersistentTaskMode = Literal["create", "incremental", "rebuild", "update"]
+PersistentTaskMode = Literal[
+    "create", "incremental", "rebuild", "backfill", "update"
+]
 PersistentTaskPhase = Literal[
     "sync", "render", "bloggers", "supertopics", "duration"
 ]
@@ -51,7 +54,7 @@ _ALLOWED_STATES = {
     "running", "pausing", "waiting_resume", "cancelling",
     "done", "error", "cancelled", "abandoned",
 }
-_ALLOWED_MODES = {"create", "incremental", "rebuild", "update"}
+_ALLOWED_MODES = {"create", "incremental", "rebuild", "backfill", "update"}
 _ALLOWED_PHASES = {"sync", "render", "bloggers", "supertopics", "duration"}
 _ALLOWED_PACING_MODES = {
     "standard", "low_2_3_hours", "low_4_6_hours", "low_8_12_hours",
@@ -371,9 +374,17 @@ def _validate_record_payload(payload: object) -> PersistentTaskRecord:
         and (
             (
                 payload["task_kind"] == "personal_archive"
-                and payload["mode"] in {"create", "incremental", "rebuild"}
+                and payload["mode"] in {
+                    "create", "incremental", "rebuild", "backfill",
+                }
                 and payload["phase"] in {"sync", "render"}
-                and payload["checkpoint"] == {}
+                and (payload["checkpoint"] == {} or (
+                    isinstance(payload["checkpoint"], dict)
+                    and set(payload["checkpoint"]) <= {"video_upgrade_limit", "include_supertopics"}
+                    and payload["mode"] == "incremental"
+                    and valid_limit(payload["checkpoint"].get("video_upgrade_limit", 0))
+                    and type(payload["checkpoint"].get("include_supertopics", False)) is bool
+                ))
             )
             or (
                 payload["task_kind"] == "following_archive"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import os
 import shutil
 import stat
@@ -33,6 +34,8 @@ from backend.app.services.task_manager import TaskManager, run_in_background, ta
 from backend.app.services.system_power import KeepAwakeLease, system_power_service
 from weibo_book import WeiboBook
 from weibo_book.archive.render_snapshot import ArchiveRenderer
+from weibo_book.archive.performance import PerformanceTimings
+from weibo_book.archive.paths import ASSETS_DIR_NAME, DATA_DIR_NAME, RENDER_JOURNAL_NAME
 from weibo_book.archive.repository import ArchiveRepository
 from weibo_book.archive.pacing import AdaptiveRequestScheduler, PacingStatus
 from weibo_book.archive.source import ArchiveMediaStager, WeiboArchiveSource
@@ -44,6 +47,9 @@ from weibo_book.archive.sync import (
 )
 from weibo_book.errors import OperationCancelled, OperationPaused, WeiboError, WeiboErrorKind
 from weibo_book.extractor import WeiboExtractor
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -109,6 +115,8 @@ def render_personal_archive(
     cancel_requested: Callable[[], bool],
     begin_commit: Callable[[], bool] | None = None,
     pause_requested: Callable[[], bool] | None = None,
+    progress_callback=None,
+    timings=None,
 ) -> list[str]:
     root = _physical_root(Path(output_dir))
     with _archive_lock(root):
@@ -118,18 +126,43 @@ def render_personal_archive(
             raise OperationCancelled("任务已取消")
         repository = ArchiveRepository.open(root, uid)
         try:
+            formats = repository.read_output_formats()
             rendered = ArchiveRenderer(repository).render_all(
                 root,
                 cancel_requested=cancel_requested,
                 pause_requested=pause_requested,
                 begin_commit=begin_commit,
+                include_pdf=formats["pdf"],
+                include_markdown=formats["markdown"],
+                progress_callback=progress_callback,
+                timings=timings,
             )
         finally:
             repository.close()
-    return [
-        rendered[key].relative_to(root).as_posix()
-        for key in ("html", "pdf", "markdown", "data")
-    ]
+    return [path.relative_to(root).as_posix() for path in rendered.values()]
+
+
+def read_archive_output_formats(output_dir: str, uid: str) -> dict[str, bool]:
+    """读取归档级保存格式开关；归档不可用时按缺省（只出 HTML）处理。"""
+    try:
+        root = _physical_root(Path(output_dir))
+    except OSError:
+        return {"pdf": False, "markdown": False}
+    try:
+        repository = ArchiveRepository.open(root, uid)
+    except WeiboError:
+        return {"pdf": False, "markdown": False}
+    try:
+        return repository.read_output_formats()
+    finally:
+        repository.close()
+
+
+def expected_generated_file_count(formats: dict[str, bool]) -> int:
+    """固定成品文件数：互动 HTML 与离线数据恒在，PDF/Markdown 按开关。"""
+    return 2 + (1 if formats.get("pdf", False) else 0) + (
+        1 if formats.get("markdown", False) else 0
+    )
 
 
 class PersonalArchiveTaskService:
@@ -221,8 +254,10 @@ class PersonalArchiveTaskService:
             raise WeiboError("所选微博书已损坏，请先处理目录问题", kind=WeiboErrorKind.PARSE)
         if mode == "create" and inspection.state not in {"empty", "legacy_index"}:
             raise WeiboError("首次建立微博书只能使用空目录", kind=WeiboErrorKind.API)
-        if mode in {"incremental", "rebuild"} and inspection.state != "archive":
-            raise WeiboError("增量同步或重建必须使用现有微博书目录", kind=WeiboErrorKind.API)
+        if mode in {"incremental", "rebuild", "backfill"} and inspection.state != "archive":
+            raise WeiboError("增量同步、重建或历史回填必须使用现有微博书目录", kind=WeiboErrorKind.API)
+        if mode == "backfill" and inspection.history_complete:
+            raise WeiboError("该微博书历史已补全，无需回填", kind=WeiboErrorKind.API)
 
     def _resolve_archive_dir(
         self,
@@ -268,10 +303,14 @@ class PersonalArchiveTaskService:
             pacing_mode=request.pacing_mode,
             keep_awake_when_plugged=request.keep_awake_when_plugged,
             target_label=screen_name if login_uid != uid else None,
+            video_upgrade_limit=request.video_upgrade_limit,
+            include_supertopics=request.include_supertopics,
         )
         return self._launch(
             task_id, request.mode, effective_dir, uid, screen_name,
             resuming=False, login_uid=login_uid,
+            range_months=request.range_months,
+            backfill_months=request.backfill_months,
         )
 
     async def resume(
@@ -354,6 +393,8 @@ class PersonalArchiveTaskService:
         *,
         resuming: bool,
         login_uid: str | None = None,
+        range_months: int | None = None,
+        backfill_months: int | None = None,
     ) -> TaskStartInfo:
         worker = asyncio.create_task(
             run_in_background(
@@ -361,6 +402,8 @@ class PersonalArchiveTaskService:
                 lambda: self._execute(
                     task_id, mode, output_dir, uid, screen_name,
                     resuming=resuming, login_uid=login_uid,
+                    range_months=range_months,
+                    backfill_months=backfill_months,
                 ),
                 manager=self.manager,
                 persistent_cancel_handler=self.finish_accepted_cancel,
@@ -381,6 +424,8 @@ class PersonalArchiveTaskService:
         *,
         resuming: bool,
         login_uid: str | None = None,
+        range_months: int | None = None,
+        backfill_months: int | None = None,
     ) -> dict[str, object]:
         record = self.manager.get(task_id)
         if record is None or record.persistent_record is None:
@@ -401,6 +446,36 @@ class PersonalArchiveTaskService:
 
         execute_started = time.monotonic()
         last_pct = 0.0
+        timings = PerformanceTimings()
+        latest_event = None
+        phase_key = None
+        phase_started = execute_started
+
+        def decorate(event):
+            nonlocal latest_event, phase_key, phase_started
+            now = time.monotonic()
+            key = (event.get("phase"), event.get("subphase"))
+            if key != phase_key:
+                phase_started = now
+                phase_key = key
+            normalized = dict(event)
+            normalized["elapsed_seconds"] = now - execute_started
+            normalized["phase_elapsed_seconds"] = now - phase_started
+            normalized["timings_seconds"] = timings.snapshot()
+            latest_event = normalized
+            return normalized
+
+        async def heartbeat():
+            while record.state in {"pending", "running"}:
+                await asyncio.sleep(1)
+                if latest_event is not None and latest_event.get("phase") != "complete":
+                    # 心跳只更新时钟，不增加完成数量，也不每秒重写恢复点。
+                    event = decorate(latest_event)
+                    await self.manager.update_progress_event(task_id, event, persist=False)
+
+        ticker = asyncio.create_task(heartbeat())
+        if current_task is not None:
+            current_task.add_done_callback(lambda _task: ticker.cancel())
 
         def progress(event: dict) -> None:
             nonlocal last_pct
@@ -411,14 +486,16 @@ class PersonalArchiveTaskService:
                 normalized.update({
                     "phase": "generate",
                     "pct": 0.96,
-                    "detail": "归档数据已完成，正在生成三种格式与离线数据",
+                    "detail": "归档数据已完成，正在生成固定文件与离线数据",
                     "current": 0,
-                    "total": 4,
+                    "total": expected_generated_file_count(
+                        read_archive_output_formats(output_dir, uid)
+                    ),
                     "unit": "file",
                 })
             last_pct = max(last_pct, float(normalized.get("pct") or 0.0))
             normalized["pct"] = last_pct
-            normalized["elapsed_seconds"] = time.monotonic() - execute_started
+            normalized = decorate(normalized)
             future = asyncio.run_coroutine_threadsafe(
                 self.manager.update_progress_event(task_id, normalized),
                 loop,
@@ -505,6 +582,7 @@ class PersonalArchiveTaskService:
                     pause_event=record._pause_event,
                     cancel_event=record._cancel_event,
                     status_callback=pacing_status,
+                    timings=timings,
                 )
                 def power_snapshot():
                     snapshot = system_power_service.snapshot()
@@ -527,6 +605,11 @@ class PersonalArchiveTaskService:
                     wake_probe = getattr(source, "probe_session", None)
                     if callable(wake_probe):
                         scheduler.set_wake_probe(wake_probe)
+                    sync_options = {}
+                    if "timings" in inspect.signature(self.sync_factory).parameters:
+                        sync_options["timings"] = timings
+                    if "include_supertopics" in inspect.signature(self.sync_factory).parameters:
+                        sync_options["include_supertopics"] = record.persistent_record.checkpoint.get("include_supertopics", False)
                     sync = self.sync_factory(
                         output_dir,
                         source,
@@ -538,26 +621,44 @@ class PersonalArchiveTaskService:
                         task_id=task_id,
                         sync_run_started=save_run_id,
                         pacing_scheduler=scheduler,
+                        range_months=range_months,
+                        backfill_months=backfill_months,
+                        video_upgrade_limit=record.persistent_record.checkpoint.get("video_upgrade_limit", 0),
+                        **sync_options,
                     )
                     sync_result = await asyncio.to_thread(sync.run, mode)
                 finally:
                     scheduler.close()
                 result.update(asdict(sync_result))
+                topic_result = getattr(sync, "supertopic_result", None)
+                if topic_result:
+                    result["supertopic"] = topic_result
                 await self.manager.set_persistent_phase(task_id, "render")
 
             keep_awake.start_monitoring()
             # 渲染开始前明确进入 generate 阶段；从 render 阶段恢复时
             # sync 不会再跑，progress() 不会有任何事件。
+            file_total = expected_generated_file_count(
+                await asyncio.to_thread(
+                    read_archive_output_formats, output_dir, uid
+                )
+            )
             last_pct = max(last_pct, 0.96)
-            await self.manager.update_progress_event(task_id, {
+            await self.manager.update_progress_event(task_id, decorate({
                 "phase": "generate",
                 "pct": last_pct,
-                "detail": "归档数据已完成，正在生成三种格式与离线数据",
+                "detail": "归档数据已完成，正在生成固定文件与离线数据",
                 "current": 0,
-                "total": 4,
+                "total": file_total,
                 "unit": "file",
                 "elapsed_seconds": time.monotonic() - execute_started,
-            })
+            }))
+            render_options = {}
+            parameters = inspect.signature(self.render_func).parameters
+            if "progress_callback" in parameters:
+                render_options["progress_callback"] = progress
+            if "timings" in parameters:
+                render_options["timings"] = timings
             generated_files = await asyncio.to_thread(
                 self.render_func,
                 output_dir,
@@ -565,6 +666,7 @@ class PersonalArchiveTaskService:
                 record._cancel_event.is_set,
                 record.try_begin_commit,
                 record._pause_event.is_set,
+                **render_options,
             )
         except BaseException:
             try:
@@ -580,6 +682,7 @@ class PersonalArchiveTaskService:
                         record.persistent_record.expected_uid,
                     )
             finally:
+                ticker.cancel()
                 if keep_awake is not None:
                     keep_awake.close()
             raise
@@ -611,16 +714,27 @@ class PersonalArchiveTaskService:
                 raise WeiboError("完成后的微博书归档验证失败", kind=WeiboErrorKind.PARSE)
             result["generated_files"] = generated_files
             result["total_posts"] = inspection.total_posts
-            # 三种格式与离线数据全部就绪后才允许前端展示「已完成」。
-            await self.manager.update_progress_event(task_id, {
+            result["output_dir"] = str(output_dir)
+            result["uid"] = uid
+            result["screen_name"] = screen_name
+            try:
+                from backend.app.services.archive_library import register_archive
+                await asyncio.to_thread(register_archive, output_dir, expected_uid=uid)
+            except (WeiboError, OSError):
+                logger.warning("微博书已完成，但书库登记未能更新")
+            result["timings_seconds"] = timings.snapshot()
+            result["elapsed_seconds"] = time.monotonic() - execute_started
+            # 固定文件与离线数据全部就绪后才允许前端展示「已完成」。
+            await self.manager.update_progress_event(task_id, decorate({
                 "phase": "complete",
                 "pct": 1.0,
                 "detail": "微博书归档与固定文件已完成",
-                "current": 4,
-                "total": 4,
+                "current": len(generated_files),
+                "total": len(generated_files),
                 "unit": "file",
                 "elapsed_seconds": time.monotonic() - execute_started,
-            })
+            }))
+            ticker.cancel()
             return result
         finally:
             if keep_awake is not None:
@@ -774,7 +888,7 @@ class PersonalArchiveTaskService:
                 )
                 untouched_existing = (
                     persistent.phase == "sync"
-                    and persistent.mode in {"incremental", "rebuild"}
+                    and persistent.mode in {"incremental", "rebuild", "backfill"}
                     and inspection.state == "archive"
                     and inspection.uid == expected_uid
                 )
@@ -950,8 +1064,11 @@ class PersonalArchiveTaskService:
         root = _physical_root(Path(output_dir))
         if _rebuild_state_path(root).exists():
             raise WeiboError("存在活动目录替换日志，拒绝放弃清理", kind=WeiboErrorKind.API)
-        render_journal = root / "data" / ".weishushu-render-state.json"
-        if render_journal.exists() or render_journal.is_symlink():
+        render_journals = (
+            root / ASSETS_DIR_NAME / DATA_DIR_NAME / RENDER_JOURNAL_NAME,
+            root / "data" / RENDER_JOURNAL_NAME,
+        )
+        if any(journal.exists() or journal.is_symlink() for journal in render_journals):
             raise WeiboError("存在活动固定文件发布日志，拒绝放弃清理", kind=WeiboErrorKind.API)
         if mode in {"create", "rebuild"}:
             temporary = root.parent / f".{root.name}.{mode}-task-{task_id}"
@@ -975,7 +1092,7 @@ class PersonalArchiveTaskService:
         repository = ArchiveRepository.open(root, uid)
         try:
             sync = repository.get_sync_run(run_id)
-            if sync.mode != "incremental":
+            if sync.mode not in {"incremental", "backfill"}:
                 raise WeiboError("同步记录模式与持久任务不一致", kind=WeiboErrorKind.PARSE)
             repository.clear_sync_checkpoint(run_id, terminal_status)
         finally:
@@ -1160,7 +1277,7 @@ class PersonalArchiveTaskService:
         return persistent
 
     def _local_resume_uid(self, persistent) -> str:
-        if persistent.phase == "render" or persistent.mode == "incremental":
+        if persistent.phase == "render" or persistent.mode in {"incremental", "backfill"}:
             root = _physical_root(Path(persistent.output_dir))
             inspection = self.inspector(str(root), current_uid="")
             if inspection.state != "uid_mismatch" or not inspection.uid:

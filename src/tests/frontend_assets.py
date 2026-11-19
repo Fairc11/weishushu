@@ -26,6 +26,7 @@ FRONTEND_MODULES = (
     "login.js",
     "archive.js",
     "tasks.js",
+    "settings.js",
     "desktop.js",
 )
 

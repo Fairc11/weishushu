@@ -20,7 +20,7 @@ CSS_SRC = APP_CSS.read_text(encoding="utf-8")
 
 
 class C1HistorySearchMethodsTests(unittest.TestCase):
-    """C1: v1.1.6 toggleHistory / pickHistoryFolder / runSearch 三个方法必须实现。"""
+    """C1: toggleHistory / pickHistoryFolder 与微博书库方法必须实现。"""
 
     def test_toggle_history_defined(self):
         """app.js 全文 0 处定义 → TypeError，必须实现"""
@@ -37,28 +37,27 @@ class C1HistorySearchMethodsTests(unittest.TestCase):
             "缺少 pickHistoryFolder 方法定义（C1 修复）",
         )
 
-    def test_run_search_defined(self):
-        self.assertRegex(
-            SRC,
-            r"runSearch\s*\(\)\s*\{",
-            "缺少 runSearch 方法定义（C1 修复）",
-        )
+    def test_archive_library_methods_defined(self):
+        for name in ("renderArchiveLibrary", "updateLibraryEntry", "pickTargetFolder",
+                     "showPickedTargetInspection", "resetPickedTargetFolder"):
+            self.assertRegex(
+                SRC,
+                name + r"\s*\(",
+                f"缺少 {name} 方法定义",
+            )
 
     def test_pick_history_folder_uses_pywebview_select_folder(self):
         """桌面走 select_folder；dev 降级 prompt"""
-        m = re.search(r"pickHistoryFolder\s*\(\)\s*\{(.*?)\n\s*\},", SRC, re.DOTALL)
+        m = re.search(r"selectLibraryDirectory\s*\(\)\s*\{(.*?)\n\s*\},", SRC, re.DOTALL)
         self.assertIsNotNone(m, "pickHistoryFolder 方法未找到")
         body = m.group(1)
         self.assertIn("select_folder", body)
         self.assertIn("prompt", body)
 
-    def test_run_search_uses_backup_search_api(self):
-        m = re.search(r"runSearch\s*\(\)\s*\{(.*?)\n\s*\},", SRC, re.DOTALL)
-        self.assertIsNotNone(m, "runSearch 方法未找到")
-        body = m.group(1)
-        self.assertIn("backupSearch", body)
-        self.assertIn("search-input", body)
-        self.assertIn("historyFolder", body)
+    def test_refresh_history_list_uses_registered_library_api(self):
+        m = re.search(r"refreshHistoryList\s*\(\)\s*\{(.*?)\n    \},", SRC, re.DOTALL)
+        self.assertIsNotNone(m, "refreshHistoryList 方法未找到")
+        self.assertIn("libraryList", m.group(1))
 
 
 class C2WsCloseOnTerminalTests(unittest.TestCase):

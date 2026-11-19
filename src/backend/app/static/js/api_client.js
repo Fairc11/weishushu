@@ -133,8 +133,42 @@
       return this._backupFetch('/api/backup/inspect', req);
     },
 
+    backupVideoQualityCheck(req) {
+      return this._fetch('/api/backup/video-quality/check', {method: 'POST', body: JSON.stringify(req)});
+    },
+
+    backupArchives(outputDir) {
+      return this._fetch('/api/backup/archives', {method: 'POST', body: JSON.stringify({output_dir: outputDir})});
+    },
+
+    libraryList() { return this._fetch('/api/backup/library'); },
+    librarySizes(path) { return this._fetch('/api/backup/library/sizes' + (path ? `?path=${encodeURIComponent(path)}` : '')); },
+    notify(title, message) { return this._fetch('/api/maintenance/notify', { method: 'POST', body: JSON.stringify({ title, message }) }); },
+    maintenanceCache() { return this._fetch('/api/maintenance/cache'); },
+    maintenanceCacheClear(key) { return this._fetch('/api/maintenance/cache/clear', { method: 'POST', body: JSON.stringify({ key }) }); },
+    libraryRegister(outputDir, uid = null) {
+      return this._fetch('/api/backup/library/register', {method: 'POST', body: JSON.stringify({output_dir: outputDir, uid})});
+    },
+    libraryRelocate(entry, outputDir) {
+      return this._fetch('/api/backup/library/relocate', {method: 'POST', body: JSON.stringify({path: entry.path, uid: entry.uid, output_dir: outputDir})});
+    },
+    libraryRemove(entry) {
+      return this._fetch('/api/backup/library/remove', {method: 'POST', body: JSON.stringify({path: entry.path, uid: entry.uid})});
+    },
     backupStart(req) {
       return this._fetch('/api/backup/start', { method: 'POST', body: JSON.stringify(req) });
+    },
+
+    backupSettingsGet(outputDir) {
+      return this._fetch(`/api/backup/settings?output_dir=${encodeURIComponent(outputDir)}`);
+    },
+
+    backupSettingsSave(req) {
+      return this._fetch('/api/backup/settings', { method: 'POST', body: JSON.stringify(req) });
+    },
+
+    backupPreview(req) {
+      return this._fetch('/api/backup/preview', { method: 'POST', body: JSON.stringify(req) });
     },
 
     searchUsers(query) {
@@ -163,6 +197,30 @@
 
     firstRunAccept() {
       return this._fetch('/api/first-run/accept', { method: 'POST' });
+    },
+
+    updateCheck() {
+      return this._fetch('/api/update/check');
+    },
+
+    updateInstall() {
+      return this._fetch('/api/update/install', { method: 'POST' });
+    },
+
+    updateApply(stagedPath) {
+      return this._fetch('/api/update/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ staged_path: stagedPath }),
+      });
+    },
+
+    closeWindow() {
+      return desktop.call('close_window');
+    },
+
+    openDataDir() {
+      return desktop.call('open_data_dir');
     },
 
     openBrowserWindow() {

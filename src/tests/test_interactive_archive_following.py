@@ -165,7 +165,9 @@ def _render_all(tmp_path, following_items=None, cutoff="2026-07-18T00:00:00+00:0
         root, render_pdf=lambda _html, path: path.write_bytes(b"pdf")
     )
     html = (root / "微博书.html").read_text(encoding="utf-8")
-    data = (root / "data" / "archive-data.js").read_text(encoding="utf-8")
+    data = (root / "数据与媒体" / "数据" / "archive-data.js").read_text(
+        encoding="utf-8"
+    )
     return html, data
 
 

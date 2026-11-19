@@ -1,4 +1,7 @@
-"""v2.0.0 release_check.py — 33 项硬约束（B18: 27 → 33）。
+"""release_check.py — 发布前代码与封包硬约束。
+
+2026-11-18 起只检查代码、封包配置与隐私边界；文档措辞不再作为门禁
+（原第 16、17、18、21、22、25、26、27 项已移除，编号保留空缺以便追溯）。
 
 参考抖音 v1.4.2 release_check.py（16→20 项）。在 build_exe.bat 阶段 3 跑，
 任何一项 FAIL 必须修复后重跑，杜绝"开发机过了干净机跪"。
@@ -43,52 +46,6 @@ ROOT = Path(__file__).resolve().parents[1]
 # Windows完整pytest实际约235秒，旧180秒硬编码会误超时，这里放宽到600秒。
 PYTEST_TIMEOUT_SECONDS = 600
 
-THREE_ENVIRONMENT_ISOLATION_RULE_TOKENS = (
-    "backend.app.profile",
-    "WEISHUSHU_PROFILE",
-    "WeishushuDev",
-    ".weibo_book_cookies_dev",
-    "defaultDataStore()",
-    "nonPersistentDataStore()",
-    "不得回退",
-    "frozen 只信任可执行文件名",
-    "get_cookie_file_path()",
-    "chrome-import-profile",
-    "旧 Windows Cookie",
-    "冲突参数",
-)
-
-
-def _without_html_comments(text: str) -> str:
-    return re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
-
-
-def _markdown_section(text: str, heading: str) -> str:
-    visible = _without_html_comments(text)
-    start = visible.find(heading)
-    if start < 0:
-        return ""
-    following_heading = re.search(r"^##\s+", visible[start + len(heading):], re.MULTILINE)
-    if following_heading is None:
-        return visible[start:]
-    end = start + len(heading) + following_heading.start()
-    return visible[start:end]
-
-
-def _clinerules_isolation_rule(text: str) -> str:
-    visible = _without_html_comments(text)
-    marker = re.search(
-        r"^12\.\s+.*不(?:得)?突破三端隔离.*$",
-        visible,
-        flags=re.MULTILINE,
-    )
-    if marker is None:
-        return ""
-    following_rule = re.search(r"^\d+\.\s+", visible[marker.end():], re.MULTILINE)
-    if following_rule is None:
-        return visible[marker.start():]
-    end = marker.end() + following_rule.start()
-    return visible[marker.start():end]
 
 STANDARD_MIT_LICENSE = """MIT License
 
@@ -111,28 +68,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE."""
-
-REVIEWED_WINDOWS_WEBVIEW2_V147_DECISION = """# Windows WebView2 v147 技术决策
-
-## 复现背景
-
-Windows 历史路线 A 试图使用 Win32 和 WebView2 双控件，在主窗口内渲染网页。该路线假设可以从已安装的 WebView2 Runtime 目录直接加载 `WebView2Loader.dll`，再通过简单 C 导出调用 `CreateCoreWebView2EnvironmentWithOptions`。
-
-## 精确证据
-
-- Windows 环境已检测到 WebView2 Runtime `147.0.3912.86`。
-- Win32 离屏窗口可以创建和销毁。
-- 该运行时路径中不存在旧路线假设的 `WebView2Loader.dll`。
-- `CreateCoreWebView2EnvironmentWithOptions 不再作为 C 导出`，因此旧路线所需的调用路径不可用。
-
-## 影响
-
-以上证据足以确认，依赖 `comtypes` 与简单 C 导出的旧路线 A 对 v147 不可行。该结论不等于 WebView2 原生宿主永久不可行；使用正式 SDK、.NET 包装或独立原生宿主需要另行设计和验证。
-
-## 决策
-
-- 旧路线 A 不实施，不进入当前主线。
-- Windows 链路仅保留历史兼容策略：pywebview 的 WebView2 支持、WebView2 Runtime 注册表检测，以及 `C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application` 与 `C:\\Program Files\\Microsoft\\EdgeWebView\\Application` 文件系统兜底检测。"""
 
 
 class Check(NamedTuple):
@@ -357,70 +292,6 @@ def check_15_playwright_5_filenames() -> Check:
 
 # ====== 文档 ======
 
-def check_16_changelog_v114() -> Check:
-    """16. CHANGELOG.md 含当前 v2.0.0 + 上一公开历史 v1.1.6 两节。"""
-    f = ROOT / "CHANGELOG.md"
-    if not f.exists():
-        return check("16 CHANGELOG.md", False, "缺")
-    text = f.read_text(encoding="utf-8")
-    has_200 = "[2.0.0]" in text
-    has_116 = "[1.1.6]" in text
-    if has_200 and has_116:
-        return check("16 CHANGELOG 含 v2.0.0 + v1.1.6", True, "两节均在")
-    missing = []
-    if not has_200:
-        missing.append("v2.0.0")
-    if not has_116:
-        missing.append("v1.1.6")
-    return check("16 CHANGELOG 含 v2.0.0 + v1.1.6", False, f"缺: {', '.join(missing)}")
-
-
-def check_17_root_agents_md() -> Check:
-    """17. 项目根 AGENTS.md 存在且包含三端隔离硬规则。"""
-    f = ROOT / "AGENTS.md"
-    if not f.exists() or f.stat().st_size <= 1000:
-        return check("17 AGENTS.md 三端隔离规则", False, "不存在或太小")
-    text = _markdown_section(
-        f.read_text(encoding="utf-8"),
-        "## 三端隔离硬规则",
-    )
-    if not text:
-        return check(
-            "17 AGENTS.md 三端隔离规则",
-            False,
-            f"缺 {['三端隔离硬规则', *THREE_ENVIRONMENT_ISOLATION_RULE_TOKENS]}",
-        )
-    missing = [
-        token
-        for token in THREE_ENVIRONMENT_ISOLATION_RULE_TOKENS
-        if token not in text
-    ]
-    return check(
-        "17 AGENTS.md 三端隔离规则",
-        not missing,
-        f"缺 {missing}" if missing else "完整",
-    )
-
-
-def check_18_no_relative_time() -> Check:
-    """18. 文档无残留相对时间（"今天/昨天/最近"）"""
-    md_files = list(ROOT.glob("*.md")) + list((ROOT / "docs").glob("*.md"))
-    bad = []
-    for f in md_files:
-        # 规范/规则类文档允许引用"今天"作为反例
-        if "docs-convention" in f.name or "user_ptu" in f.name or "user_visual" in f.name:
-            continue
-        if "DOCS_TODO" in f.name or "CONVENTION" in f.name.upper():
-            continue
-        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
-            # 排除产品功能描述："看最近 20 条微博"
-            if re.search(r"看最近 \d+ 条|最近 \d+ 天|看最近 7 天", line):
-                continue
-            # 命中"今天"或"昨天"
-            if "今天" in line or "昨天" in line:
-                bad.append(f"{f.name}:{n}: {line[:50]}")
-    return check("18 文档无相对时间", len(bad) == 0, f"{len(bad)} 处" if bad else "全用绝对时间")
-
 
 # ====== 测试 ======
 
@@ -428,7 +299,7 @@ def check_19_tests_pass() -> Check:
     """19. 测试全绿（W1只运行一次完整pytest，由本项真实执行）。"""
     try:
         r = subprocess.run(
-            [sys.executable, "-m", "pytest", "tests/", "-q", "--no-header"],
+            [sys.executable, "-m", "pytest", "tests/", "-q", "--no-header", "-rf"],
             cwd=str(ROOT),
             capture_output=True,
             text=True,
@@ -436,7 +307,7 @@ def check_19_tests_pass() -> Check:
         )
         out = (r.stdout or "") + (r.stderr or "")
         if r.returncode != 0:
-            return check("19 测试全绿", False, f"pytest exit={r.returncode}: {out[-200:]}")
+            return check("19 测试全绿", False, f"pytest exit={r.returncode}: {out[-1500:]}")
         m = re.search(r"(\d+) passed", out)
         if m and int(m.group(1)) >= 199:
             return check("19 测试全绿", True, f"{m.group(1)} passed")
@@ -467,37 +338,6 @@ def check_20_compileall() -> Check:
 
 
 # ====== v1.2.0 V120-6: 红线扫描（10 不做）======
-
-def check_21_risks_md_exists() -> Check:
-    """21. RISKS.md 存在（v1.2.0 起强制，8 类风险 + 10 不做）"""
-    p = ROOT / "RISKS.md"
-    if p.exists() and p.stat().st_size > 1000:
-        return check("21 RISKS.md 存在", True, f"{p.stat().st_size} bytes")
-    return check("21 RISKS.md 存在", False, f"不存在或太小: {p}")
-
-
-def check_22_clinerules_exists() -> Check:
-    """22. .clinerules 存在并包含三端隔离硬规则。"""
-    p = ROOT / ".clinerules"
-    if not p.exists() or p.stat().st_size <= 200:
-        return check("22 .clinerules 三端隔离规则", False, "不存在或太小")
-    text = _clinerules_isolation_rule(p.read_text(encoding="utf-8"))
-    if not text:
-        return check(
-            "22 .clinerules 三端隔离规则",
-            False,
-            f"缺 {['不突破三端隔离', *THREE_ENVIRONMENT_ISOLATION_RULE_TOKENS]}",
-        )
-    missing = [
-        token
-        for token in THREE_ENVIRONMENT_ISOLATION_RULE_TOKENS
-        if token not in text
-    ]
-    return check(
-        "22 .clinerules 三端隔离规则",
-        not missing,
-        f"缺 {missing}" if missing else "完整",
-    )
 
 
 def check_23_no_redline_keywords_in_business() -> Check:
@@ -553,63 +393,6 @@ def check_24_license_and_binary_policy() -> Check:
         return check(name, False, "LICENSE 不是固定的标准 MIT 正文")
 
     return check(name, True, "LICENSE 为标准 MIT 正文")
-
-
-def check_25_readme_risk_notice_at_top() -> Check:
-    """25. README.md 顶部有"风险须知"段 + 含 10 不做清单。"""
-    p = ROOT / "README.md"
-    if not p.exists():
-        return check("25 README 风险须知", False, f"不存在: {p}")
-    text = p.read_text(encoding="utf-8")
-    # 顶部 2000 字符内必须含
-    head = text[:2000]
-    missing = []
-    if "风险须知" not in head:
-        missing.append("风险须知")
-    if "评论发布" not in head or "多账号池" not in head:
-        missing.append("10 不做清单")
-    if missing:
-        return check("25 README 风险须知", False, f"缺: {', '.join(missing)}")
-    return check("25 README 风险须知", True, "顶部含 风险须知 + 10 不做")
-
-
-def check_26_clinerules_has_core_rules() -> Check:
-    """26. .clinerules 含 12 铁律 + 公开仓库策略。"""
-    p = ROOT / ".clinerules"
-    if not p.exists():
-        return check("26 .clinerules 铁律", False, f"不存在: {p}")
-    text = p.read_text(encoding="utf-8")
-    missing = []
-    if "12 条" not in text and "12 条铁律" not in text:
-        missing.append("12 铁律")
-    if "公开 GitHub 仓库" not in text:
-        missing.append("公开仓库策略")
-    if missing:
-        return check("26 .clinerules 铁律", False, f"缺: {', '.join(missing)}")
-    return check("26 .clinerules 铁律", True, "含 12 铁律 + 公开仓库策略")
-
-
-def check_27_v120_stage4_route_b_locked() -> Check:
-    """27. Windows WebView2 v147 旧路线技术决策已公开固化。"""
-    p = ROOT / "docs" / "decisions" / "windows-webview2-v147.md"
-    if not p.exists():
-        return check(
-            "27 WebView2 v147 技术决策",
-            False,
-            "不存在: docs/decisions/windows-webview2-v147.md",
-        )
-    text = p.read_text(encoding="utf-8")
-    if text.rstrip("\r\n") != REVIEWED_WINDOWS_WEBVIEW2_V147_DECISION:
-        return check(
-            "27 WebView2 v147 技术决策",
-            False,
-            "docs/decisions/windows-webview2-v147.md 不是已审查的固定正文",
-        )
-    return check(
-        "27 WebView2 v147 技术决策",
-        True,
-        f"公开技术决策已写入 {p.name}",
-    )
 
 
 # ====== B18 v1.2.0: 6 项新增封包链路硬约束（check_28 ~ check_33） ======
@@ -824,21 +607,12 @@ def main() -> int:
         check_13_installer_iss_exists(),
         check_14_build_bat_exists(),
         check_15_playwright_5_filenames(),
-        check_16_changelog_v114(),
-        check_17_root_agents_md(),
-        check_18_no_relative_time(),
         check_19_tests_pass(),
         check_20_compileall(),
         # v1.2.0 V120-6: 红线扫描
-        check_21_risks_md_exists(),
-        check_22_clinerules_exists(),
         check_23_no_redline_keywords_in_business(),
         # v1.2.0 收口 D: 公开 repo 分发策略锁
         check_24_license_and_binary_policy(),
-        check_25_readme_risk_notice_at_top(),
-        check_26_clinerules_has_core_rules(),
-        # v1.2.0 收口 E: V120-4 路线 A 不可行证据固化
-        check_27_v120_stage4_route_b_locked(),
         # B18 v1.2.0: 封包链路 6 项新增
         check_28_requirements_pinned(),
         check_29_installer_version_consistent(),
@@ -849,7 +623,7 @@ def main() -> int:
     ]
     print()
     print("=" * 60)
-    print("  v2.0.0 release_check.py · 33 项硬约束")
+    print(f"  release_check.py · {len(checks)} 项硬约束")
     print("=" * 60)
     passed = 0
     for c in checks:

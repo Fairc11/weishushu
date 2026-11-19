@@ -4,10 +4,12 @@ const followingCategoryDefs=[{key:"blogger",label:"关注博主"},{key:"supertop
 let followingCurrentCategory="blogger";
 let followingSortMode="real_followed";
 function switchTab(name){
-document.querySelectorAll('[data-tab]').forEach(btn=>{btn.setAttribute('aria-pressed',String(btn.dataset.tab===name))});
+pauseAllVideos();
+document.querySelectorAll('[data-tab]').forEach(btn=>{if(btn.dataset.contentTab!==undefined){btn.classList.toggle('is-off',name!=="feed");return}btn.setAttribute('aria-pressed',String(btn.dataset.tab===name))});
 document.querySelectorAll('[data-tab-panel]').forEach(panel=>{panel.hidden=panel.dataset.tabPanel!==name});
 const titleEl=document.querySelector('[data-title]');
-if(titleEl)titleEl.textContent=name==="following"?"关注资料":"微博书";
+// 版式 V4：顶栏导航已标出当前页签，标题始终保持博主名
+if(titleEl)titleEl.textContent=titleEl.dataset.titleDefault||"微博书";
 if(name==="following")renderFollowingView();
 }
 function renderFollowingView(){

@@ -77,6 +77,10 @@ def test_inspection_model_has_exact_defaults():
         "total_posts": 0,
         "last_successful_sync_at": "",
         "message": "",
+        "history_complete": True,
+        "history_cutoff": "",
+        "output_formats": {"pdf": False, "markdown": False},
+        "book_format_version": None,
     }
 
 
@@ -133,7 +137,7 @@ def test_file_path_uses_existing_repository_nonempty_semantics(tmp_path):
 def test_valid_archive_returns_identity_count_and_last_sync(tmp_path):
     selected = tmp_path / "archive"
     _create_archive(selected)
-    manifest_path = selected / "manifest.json"
+    manifest_path = selected / "数据与媒体" / "数据" / "manifest.json"
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["last_successful_sync_at"] = "2026-07-14T01:02:03+00:00"
     manifest_path.write_text(
@@ -161,13 +165,16 @@ def test_schema_one_archive_is_recognized_without_migrating_it(tmp_path):
         "following_objects",
         "following_snapshot_items",
         "following_snapshots",
+        "profile_assets",
+        "pin_observations",
+        "fans_observations",
     ):
         repository._connection.execute(f"DROP TABLE {table}")
     repository._connection.execute(
         "UPDATE archive_meta SET value_json = '1' WHERE key = 'schema_version'"
     )
     repository.close()
-    manifest_path = selected / "manifest.json"
+    manifest_path = selected / "数据与媒体" / "数据" / "manifest.json"
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["schema_version"] = 1
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -214,9 +221,9 @@ def test_half_archive_is_damaged(tmp_path, missing):
     selected = tmp_path / "archive"
     _create_archive(selected)
     target = (
-        selected / "manifest.json"
+        selected / "数据与媒体" / "数据" / "manifest.json"
         if missing == "manifest"
-        else selected / "data" / "archive.db"
+        else selected / "数据与媒体" / "数据" / "archive.db"
     )
     target.unlink()
 
@@ -230,7 +237,7 @@ def test_half_archive_is_damaged(tmp_path, missing):
 def test_broken_manifest_is_damaged_with_chinese_message(tmp_path):
     selected = tmp_path / "archive"
     _create_archive(selected)
-    (selected / "manifest.json").write_text("{broken", encoding="utf-8")
+    (selected / "数据与媒体" / "数据" / "manifest.json").write_text("{broken", encoding="utf-8")
 
     inspection = _inspect_without_writes(selected, "10001")
 
@@ -241,7 +248,7 @@ def test_broken_manifest_is_damaged_with_chinese_message(tmp_path):
 def test_manifest_with_wrong_structure_is_damaged(tmp_path):
     selected = tmp_path / "archive"
     _create_archive(selected)
-    (selected / "manifest.json").write_text(
+    (selected / "数据与媒体" / "数据" / "manifest.json").write_text(
         '{"schema_version":1,"uid":"10001"}', encoding="utf-8"
     )
 
@@ -254,7 +261,7 @@ def test_manifest_with_wrong_structure_is_damaged(tmp_path):
 def test_database_missing_required_table_is_damaged(tmp_path):
     selected = tmp_path / "archive"
     _create_archive(selected)
-    connection = sqlite3.connect(selected / "data" / "archive.db")
+    connection = sqlite3.connect(selected / "数据与媒体" / "数据" / "archive.db")
     connection.execute("DROP TABLE media")
     connection.commit()
     connection.close()
@@ -391,7 +398,7 @@ def test_active_wal_is_read_from_external_snapshot_without_changing_source(tmp_p
     )
     repository._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     repository.upsert_post(PostRecord(bid="WAL-POST", uid="10001", text="正文"))
-    assert (selected / "data" / "archive.db-wal").stat().st_size > 0
+    assert (selected / "数据与媒体" / "数据" / "archive.db-wal").stat().st_size > 0
     before = _tree_snapshot(selected)
 
     inspection = inspect_archive_folder(selected, current_uid="10001")
@@ -416,17 +423,17 @@ def test_archive_symlink_markers_are_damaged_without_identity_leak(tmp_path, mar
         selected = tmp_path / "selected-link"
         selected.symlink_to(real_archive, target_is_directory=True)
     elif marker == "manifest":
-        source = real_archive / "manifest.json"
+        source = real_archive / "数据与媒体" / "数据" / "manifest.json"
         external_manifest = external / "manifest.json"
         source.replace(external_manifest)
         source.symlink_to(external_manifest)
     elif marker == "data":
-        source = real_archive / "data"
+        source = real_archive / "数据与媒体" / "数据"
         external_data = external / "data"
         source.replace(external_data)
         source.symlink_to(external_data, target_is_directory=True)
     else:
-        source = real_archive / "data" / "archive.db"
+        source = real_archive / "数据与媒体" / "数据" / "archive.db"
         external_database = external / "archive.db"
         source.replace(external_database)
         source.symlink_to(external_database)
@@ -450,17 +457,17 @@ def test_archive_marker_with_wrong_file_type_is_damaged(tmp_path, marker):
     _create_archive(selected)
 
     if marker == "manifest":
-        target = selected / "manifest.json"
+        target = selected / "数据与媒体" / "数据" / "manifest.json"
         target.unlink()
         target.mkdir()
     elif marker == "data":
-        data = selected / "data"
+        data = selected / "数据与媒体" / "数据"
         for child in data.iterdir():
             child.unlink()
         data.rmdir()
         data.write_text("不是目录", encoding="utf-8")
     else:
-        target = selected / "data" / "archive.db"
+        target = selected / "数据与媒体" / "数据" / "archive.db"
         target.unlink()
         target.mkdir()
 
@@ -498,24 +505,31 @@ def test_snapshot_detects_data_directory_replacement(tmp_path):
     selected = tmp_path / "archive"
     _create_archive(selected)
     root_fd = os.open(selected, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    data_fd = os.open(
-        "data",
+    assets_fd = os.open(
+        "数据与媒体",
         os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
         dir_fd=root_fd,
     )
+    data_fd = os.open(
+        "数据",
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=assets_fd,
+    )
     data_identity = archive_folder_module._identity(os.fstat(data_fd))
-    (selected / "data").rename(selected / "old-data")
-    (selected / "data").mkdir()
+    (selected / "数据与媒体" / "数据").rename(selected / "数据与媒体" / "old-data")
+    (selected / "数据与媒体" / "数据").mkdir()
 
     try:
         assert (
             archive_folder_module._snapshot_source_unchanged(
-                (), root_fd, data_fd, data_identity, wal_was_absent=True
+                (), root_fd, data_fd, data_identity, wal_was_absent=True,
+                data_parent_fd=assets_fd, data_name="数据",
             )
             is False
         )
     finally:
         os.close(data_fd)
+        os.close(assets_fd)
         os.close(root_fd)
 
 
@@ -564,7 +578,7 @@ def test_manifest_replaced_during_database_validation_retries_new_identity(
 ):
     selected = tmp_path / "archive"
     _create_archive(selected)
-    manifest_path = selected / "manifest.json"
+    manifest_path = selected / "数据与媒体" / "数据" / "manifest.json"
     new_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     new_payload["screen_name"] = "替换后用户"
     real_validate = archive_folder_module._validate_database
@@ -606,12 +620,12 @@ def test_database_replaced_during_validation_retries_new_count(
         if not replaced:
             replaced = True
             if replacement == "data":
-                (selected / "data").rename(tmp_path / "old-data")
-                (prepared / "data").rename(selected / "data")
+                (selected / "数据与媒体" / "数据").rename(tmp_path / "old-data")
+                (prepared / "数据与媒体" / "数据").rename(selected / "数据与媒体" / "数据")
             else:
                 os.replace(
-                    prepared / "data" / "archive.db",
-                    selected / "data" / "archive.db",
+                    prepared / "数据与媒体" / "数据" / "archive.db",
+                    selected / "数据与媒体" / "数据" / "archive.db",
                 )
         return real_validate(database_path)
 
@@ -628,7 +642,7 @@ def test_wal_created_with_new_commit_during_validation_retries_new_count(
 ):
     selected = tmp_path / "archive"
     _create_archive(selected)
-    assert not (selected / "data" / "archive.db-wal").exists()
+    assert not (selected / "数据与媒体" / "数据" / "archive.db-wal").exists()
     real_validate = archive_folder_module._validate_database
     writers = []
 
@@ -655,7 +669,7 @@ def test_source_changed_during_every_validation_returns_damaged_without_leak(
 ):
     selected = tmp_path / "archive"
     _create_archive(selected, uid="private-uid")
-    manifest_path = selected / "manifest.json"
+    manifest_path = selected / "数据与媒体" / "数据" / "manifest.json"
     real_validate = archive_folder_module._validate_database
     changes = 0
 
@@ -688,7 +702,7 @@ def test_manifest_disappears_between_lstat_and_open_then_retries(
 ):
     selected = tmp_path / "archive"
     _create_archive(selected)
-    manifest_path = selected / "manifest.json"
+    manifest_path = selected / "数据与媒体" / "数据" / "manifest.json"
     manifest_bytes = manifest_path.read_bytes()
     real_open = archive_folder_module.os.open
     raced = False
@@ -710,7 +724,7 @@ def test_manifest_disappears_between_lstat_and_open_then_retries(
 def test_wal_disappears_between_lstat_and_open_then_retries(tmp_path, monkeypatch):
     selected = tmp_path / "archive"
     _create_archive(selected)
-    wal_path = selected / "data" / "archive.db-wal"
+    wal_path = selected / "数据与媒体" / "数据" / "archive.db-wal"
     wal_path.write_bytes(b"")
     real_open_regular = archive_folder_module._open_regular_at
     raced = False
@@ -735,9 +749,9 @@ def test_source_reset_between_lstat_and_open_retries(tmp_path, monkeypatch, mark
     repository.upsert_post(PostRecord(bid="WAL-POST", uid="10001", text="正文"))
     repository.close()
     paths = {
-        "manifest": selected / "manifest.json",
-        "database": selected / "data" / "archive.db",
-        "wal": selected / "data" / "archive.db-wal",
+        "manifest": selected / "数据与媒体" / "数据" / "manifest.json",
+        "database": selected / "数据与媒体" / "数据" / "archive.db",
+        "wal": selected / "数据与媒体" / "数据" / "archive.db-wal",
     }
     target = paths[marker]
     if marker == "wal" and not target.exists():
@@ -764,7 +778,7 @@ def test_source_reset_between_lstat_and_open_retries(tmp_path, monkeypatch, mark
 
 
 def test_archive_folder_name_sanitizes_nickname():
-    assert archive_folder_name("星星点点的碎片", "7148187910") == "星星点点的碎片_7148187910"
+    assert archive_folder_name("示例用户", "1000000003") == "示例用户_1000000003"
     assert archive_folder_name('a/b\\c:d*e?f"g<h>i|j', "1") == "a_b_c_d_e_f_g_h_i_j_1"
     assert archive_folder_name("  多个   空白  ", "1") == "多个 空白_1"
     assert archive_folder_name("...", "1") == "微博书_1"
@@ -878,3 +892,40 @@ def test_inspect_selected_folder_passes_through_non_ordinary_states(tmp_path):
 
     assert inspect_selected_folder(archive, "10001").path == str(archive)
     assert inspect_selected_folder(empty, "10001").state == "empty"
+
+
+def test_rename_legacy_self_archive_folder(tmp_path):
+    from backend.app.services.archive_folder import (
+        inspect_selected_folder, rename_legacy_self_archive, resolve_archive_dir,
+    )
+    legacy = tmp_path / "我的微博"
+    _create_archive(legacy)
+    renamed = rename_legacy_self_archive(legacy)
+    assert renamed == str(tmp_path / "测试用户_10001")
+    assert not legacy.exists()
+    assert (tmp_path / "测试用户_10001").is_dir()
+    # 幂等：新名字不再触发改名
+    assert rename_legacy_self_archive(renamed) == renamed
+    # 检查与备份入口都跟随新路径
+    inspection = inspect_selected_folder(renamed, "10001")
+    assert inspection.state == "archive" and inspection.path == renamed
+    assert resolve_archive_dir(renamed, "10001", "测试用户") == renamed
+
+
+def test_rename_legacy_self_archive_keeps_name_when_target_occupied(tmp_path):
+    from backend.app.services.archive_folder import rename_legacy_self_archive
+    legacy = tmp_path / "我的微博"
+    _create_archive(legacy)
+    (tmp_path / "测试用户_10001").mkdir()
+    assert rename_legacy_self_archive(legacy) == str(legacy)
+    assert legacy.is_dir()
+
+
+def test_rename_legacy_self_archive_ignores_other_folders(tmp_path):
+    from backend.app.services.archive_folder import rename_legacy_self_archive
+    other = tmp_path / "别人的微博"
+    _create_archive(other)
+    assert rename_legacy_self_archive(other) == str(other)
+    damaged = tmp_path / "我的微博"
+    damaged.mkdir()  # 空目录不是档案，不改名
+    assert rename_legacy_self_archive(damaged) == str(damaged)

@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="WEISHUSHU_", env_file=".env", extra="ignore")
 
     app_name: str = "微书薯"
-    version: str = "2.0.1"
+    version: str = "2.2.0"
     host: str = "127.0.0.1"
     port: int = 18080  # 由 desktop_app.find_free_port 实际覆盖
 

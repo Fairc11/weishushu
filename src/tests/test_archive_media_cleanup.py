@@ -28,23 +28,23 @@ def test_cleanup_removes_only_unreferenced_regular_files_in_managed_directories(
     require_symlink_capability(target_is_directory=False)
     root = tmp_path / "archive"
     repository = _repository(root)
-    kept = root / "media" / "avatars" / "kept.jpg"
-    orphan = root / "media" / "avatars" / "orphan.jpg"
+    kept = root / "数据与媒体" / "媒体" / "头像" / "kept.jpg"
+    orphan = root / "数据与媒体" / "媒体" / "头像" / "orphan.jpg"
     outside = tmp_path / "outside.jpg"
     for path in (kept, orphan, outside):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(path.name.encode("utf-8"))
-    link = root / "media" / "avatars" / "outside-link.jpg"
+    link = root / "数据与媒体" / "媒体" / "头像" / "outside-link.jpg"
     link.symlink_to(outside)
     repository.upsert_media(MediaRecord(
-        "user", "10001", "avatar", 0, "remote", "media/avatars/kept.jpg"
+        "user", "10001", "avatar", 0, "remote", "媒体/头像/kept.jpg"
     ))
 
     removed = cleanup_unreferenced_media(
-        root, repository.list_media_for_render()
+        repository.paths, repository.list_media_for_render()
     )
 
-    assert removed == ["media/avatars/orphan.jpg"]
+    assert removed == ["媒体/头像/orphan.jpg"]
     assert kept.exists()
     assert link.is_symlink()
     assert outside.read_bytes() == b"outside.jpg"
@@ -52,6 +52,7 @@ def test_cleanup_removes_only_unreferenced_regular_files_in_managed_directories(
 
 def test_cleanup_rejects_managed_directory_symlink(tmp_path):
     from weibo_book.archive.media_cleanup import cleanup_unreferenced_media
+    from weibo_book.archive.paths import ArchivePaths
     from weibo_book.archive.repository import ArchiveError
 
     require_symlink_capability(target_is_directory=True)
@@ -65,7 +66,7 @@ def test_cleanup_rejects_managed_directory_symlink(tmp_path):
     (media / "avatars").symlink_to(external, target_is_directory=True)
 
     with pytest.raises(ArchiveError, match="受管理媒体目录不能是符号链接"):
-        cleanup_unreferenced_media(root, [])
+        cleanup_unreferenced_media(ArchivePaths(root, 1), [])
 
     assert (external / "keep.jpg").read_bytes() == b"keep"
 
@@ -75,7 +76,7 @@ def test_renderer_cleans_only_after_fixed_outputs_commit(tmp_path):
 
     root = tmp_path / "archive"
     repository = _repository(root)
-    orphan = root / "media" / "posts" / "orphan.jpg"
+    orphan = root / "数据与媒体" / "媒体" / "微博图片" / "orphan.jpg"
     orphan.parent.mkdir(parents=True)
     orphan.write_bytes(b"orphan")
 

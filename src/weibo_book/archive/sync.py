@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import errno
+import calendar
 import hashlib
 import json
+import inspect
 import logging
 import re
 import shutil
@@ -14,9 +16,11 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal, Protocol
+
+import httpx
 
 from weibo_book.errors import (
     OperationCancelled,
@@ -25,23 +29,59 @@ from weibo_book.errors import (
     WeiboErrorKind,
     classify_error,
 )
-from weibo_book.models import Comment, LinkCard, Post, PostMedia
+from weibo_book.media import download_file, get_extension
+from weibo_book.models import Comment, LinkCard, MediaType, Post, PostMedia
 
-from .discovery import ProfileItem, ProfilePage, discover_incremental
-from .media_layout import media_path_shape
+from .discovery import (
+    ProfileItem,
+    ProfilePage,
+    discover_backfill,
+    discover_incremental,
+    item_before_cutoff,
+    page_reaches_cutoff,
+)
+from .media_layout import MEDIA_SUBDIR_RENAMES, media_path_shape, media_year_month
+from .live_replay import (
+    MAX_REPLAY_SEGMENTS,
+    parse_live_id,
+    parse_m3u8_segments,
+    resolve_segment_url,
+    rewrite_m3u8,
+)
+from .paths import (
+    ASSETS_DIR_NAME,
+    DATA_DIR_NAME,
+    DATABASE_NAME,
+    MANIFEST_NAME,
+    MEDIA_ROOT_NAME,
+    ArchivePaths,
+    find_child_nfc,
+    migrate_root_layout,
+)
 from .repository import ArchiveRepository
+from .profile_assets import profile_asset_identity
+from .replay_download import download_replay_segments, file_proof, copy_verified_file
 from .schema import CommentRecord, MediaRecord, PostRecord
 from .pacing import AdaptiveRequestScheduler
+from .performance import PerformanceTimings
+from .supertopic import STATE_KEY as SUPERTOPIC_STATE_KEY, SupertopicUnavailable
+from .video_playback import video_quality_score
+from . import video_quality
 
 
 logger = logging.getLogger(__name__)
 
-SyncMode = Literal["create", "incremental", "rebuild"]
+SyncMode = Literal["create", "incremental", "rebuild", "backfill"]
 _O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _O_BINARY = getattr(os, "O_BINARY", 0)
 # 增量更新时重新检查的旧微博条数（2026-08-24 由 50 调为 5，减少重复抓取开销）
 _INCREMENTAL_REFRESH_LIMIT = 5
+# 首次建档范围档（月）；0 = 全部
+_RANGE_MONTH_CHOICES = (3, 12, 24, 36, 60, 0)
+# 分段回填档（月）；0 = 补全剩余全部
+_BACKFILL_MONTH_CHOICES = (3, 12, 24, 0)
+_CUTOFF_MISSING = object()
 _SUPPORTS_DIRECTORY_FDS = (
     os.name != "nt"
     and os.open in getattr(os, "supports_dir_fd", ())
@@ -229,6 +269,10 @@ class PersonalArchiveSource(Protocol):
         self, post_id: str, limit: int = 10
     ) -> list[Comment]: ...
 
+    def fetch_profile_assets(self, uid: str) -> tuple[str, str, int | None]: ...
+
+    def fetch_avatar_album(self, uid: str) -> list[tuple[str, str | None]]: ...
+
 
 class IdentityProvider(Protocol):
     def whoami(self) -> dict: ...
@@ -252,6 +296,64 @@ class MediaStager(Protocol):
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_SUPERTOPIC_UNAVAILABLE_RETRY_DAYS = 7
+
+
+def _supertopic_in_cooldown(stored: object) -> bool:
+    """超话不可用结果的自动重试冷却：冷却期内普通备份不再重复发现请求。"""
+    if not isinstance(stored, dict) or stored.get("status") != "unavailable":
+        return False
+    checked = stored.get("checked_at")
+    if not isinstance(checked, str):
+        return False
+    try:
+        checked_at = datetime.fromisoformat(checked)
+    except ValueError:
+        return False
+    return datetime.now(timezone.utc) - checked_at < timedelta(
+        days=_SUPERTOPIC_UNAVAILABLE_RETRY_DAYS
+    )
+
+
+def _months_ago(today: date, months: int) -> date:
+    """``today`` 往前推 ``months`` 个月；日超过目标月末时收拢到月末。"""
+    month_index = today.year * 12 + (today.month - 1) - months
+    year, month_zero = divmod(month_index, 12)
+    month = month_zero + 1
+    day = min(today.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _parse_checkpoint_cutoff(checkpoint: dict[str, object]) -> date | None | object:
+    """读取恢复点里的历史截止日；缺键返回 ``_CUTOFF_MISSING``（旧恢复点=无限制）。"""
+    if "history_cutoff" not in checkpoint:
+        return _CUTOFF_MISSING
+    value = checkpoint["history_cutoff"]
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise WeiboError("同步恢复点已损坏：历史截止无效", kind=WeiboErrorKind.PARSE)
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        raise WeiboError(
+            "同步恢复点已损坏：历史截止无效", kind=WeiboErrorKind.PARSE, original=exc
+        ) from exc
+    if parsed.isoformat() != value:
+        raise WeiboError("同步恢复点已损坏：历史截止无效", kind=WeiboErrorKind.PARSE)
+    return parsed
+
+
+class _CancelRequestedEvent:
+    """把同步器的取消回调适配成 ``download_file`` 需要的取消事件。"""
+
+    def __init__(self, requested: Callable[[], bool]) -> None:
+        self._requested = requested
+
+    def is_set(self) -> bool:
+        return self._requested()
 
 
 def _media_payload(media: PostMedia, position: int) -> dict[str, object]:
@@ -399,6 +501,11 @@ class PersonalArchiveSync:
         task_id: str | None = None,
         sync_run_started: Callable[[str], None] | None = None,
         pacing_scheduler: AdaptiveRequestScheduler | None = None,
+        range_months: int | None = None,
+        backfill_months: int | None = None,
+        video_upgrade_limit: int | str = 0,
+        timings: PerformanceTimings | None = None,
+        include_supertopics: bool = False,
     ) -> None:
         self.root = Path(root)
         self.source = source
@@ -412,6 +519,19 @@ class PersonalArchiveSync:
         self.task_id = task_id
         self.sync_run_started = sync_run_started
         self.pacing_scheduler = pacing_scheduler
+        if range_months is not None and range_months not in _RANGE_MONTH_CHOICES:
+            raise WeiboError("首次建档范围无效", kind=WeiboErrorKind.API)
+        if backfill_months is not None and backfill_months not in _BACKFILL_MONTH_CHOICES:
+            raise WeiboError("分段回填范围无效", kind=WeiboErrorKind.API)
+        self.range_months = range_months
+        self.backfill_months = backfill_months
+        if not video_quality.valid_limit(video_upgrade_limit):
+            raise WeiboError("旧视频更新数量无效", kind=WeiboErrorKind.API)
+        self.video_upgrade_limit = video_upgrade_limit
+        self._layout_migrated_fs = False
+        self.include_supertopics = include_supertopics
+        self.supertopic_result = {}
+        self.timings = timings if timings is not None else PerformanceTimings()
 
     def _emit_progress(
         self,
@@ -422,6 +542,8 @@ class PersonalArchiveSync:
         current: int,
         total: int | None,
         unit: str,
+        subphase: str | None = None,
+        completed_bytes: int | None = None,
     ) -> None:
         if self.progress_callback is not None:
             self.progress_callback({
@@ -431,6 +553,9 @@ class PersonalArchiveSync:
                 "current": current,
                 "total": total,
                 "unit": unit,
+                "subphase": subphase or phase,
+                "timings_seconds": self.timings.snapshot(),
+                **({"completed_bytes": completed_bytes} if completed_bytes is not None else {}),
             })
 
     def run(self, mode: SyncMode) -> SyncResult:
@@ -475,7 +600,7 @@ class PersonalArchiveSync:
             current=1, total=1, unit="account",
         )
 
-        if mode not in ("create", "incremental", "rebuild"):
+        if mode not in ("create", "incremental", "rebuild", "backfill"):
             raise WeiboError(f"不支持的同步模式：{mode}", kind=WeiboErrorKind.API)
 
         self._check_cancelled()
@@ -485,26 +610,53 @@ class PersonalArchiveSync:
             self._recover_rebuild_journal(self_uid)
         except OSError as exc:
             raise WeiboError("恢复中断的微博书重建失败，恢复状态已保留", original=exc) from exc
+        if mode in ("incremental", "backfill"):
+            try:
+                self._layout_migrated_fs = migrate_root_layout(self.root)
+            except OSError as exc:
+                raise WeiboError("归档目录布局迁移失败", original=exc) from exc
         self._validate_target_identity(mode, self_uid)
-        if mode == "incremental":
-            return self._run_incremental(self_uid)
+        if mode in ("incremental", "backfill"):
+            return self._run_incremental(self_uid, mode)
         return self._run_replacement(mode, self_uid, screen_name)
 
     def _validate_target_identity(self, mode: SyncMode, uid: str) -> None:
         if self.root.is_symlink():
             raise WeiboError("微博书目录不能是符号链接", kind=WeiboErrorKind.API)
-        if mode in ("incremental", "rebuild"):
+        if mode in ("incremental", "rebuild", "backfill"):
             self._assert_safe_archive_markers()
             repository = ArchiveRepository.open(self.root, uid)
             repository.close()
 
     def _assert_safe_archive_markers(self) -> None:
-        markers = (
-            (self.root, "directory"),
-            (self.root / "manifest.json", "file"),
-            (self.root / "data", "directory"),
-            (self.root / "data" / "archive.db", "file"),
-        )
+        assets = find_child_nfc(self.root, ASSETS_DIR_NAME)
+        is_v2 = False
+        if assets is not None:
+            try:
+                assets_marker = assets.lstat()
+            except OSError:
+                assets_marker = None
+            is_v2 = (
+                assets_marker is not None
+                and not stat.S_ISLNK(assets_marker.st_mode)
+                and stat.S_ISDIR(assets_marker.st_mode)
+            )
+        if is_v2:
+            data_dir = assets / DATA_DIR_NAME
+            markers = (
+                (self.root, "directory"),
+                (assets, "directory"),
+                (data_dir, "directory"),
+                (data_dir / MANIFEST_NAME, "file"),
+                (data_dir / DATABASE_NAME, "file"),
+            )
+        else:
+            markers = (
+                (self.root, "directory"),
+                (self.root / MANIFEST_NAME, "file"),
+                (self.root / "data", "directory"),
+                (self.root / "data" / DATABASE_NAME, "file"),
+            )
         for path, expected in markers:
             try:
                 value = path.lstat()
@@ -822,15 +974,37 @@ class PersonalArchiveSync:
         state_path.unlink()
         _fsync_directory(self.root.parent)
 
-    def _run_incremental(self, uid: str) -> SyncResult:
+    def _run_incremental(self, uid: str, mode: SyncMode = "incremental") -> SyncResult:
         repository = ArchiveRepository.open(self.root, uid)
         try:
+            self._render_after_layout_migration(repository)
             reconciled = self._reconcile_committing(repository)
             if reconciled is not None:
                 return reconciled
-            return self._execute(repository, "incremental", uid, resume=True)
+            return self._execute(repository, mode, uid, resume=True)
         finally:
             repository.close()
+
+    def _render_after_layout_migration(self, repository: ArchiveRepository) -> None:
+        """目录布局迁移后立即重渲染固定成品（不含 PDF）。
+
+        迁移已落盘，渲染失败直接抛给用户；下一次同步会按恢复状态重试。
+        """
+        if not (self._layout_migrated_fs or repository.media_layout_migrated):
+            return
+        from .render_snapshot import ArchiveRenderer
+
+        self._emit_progress(
+            "render", 0.03, "归档目录布局已更新，正在刷新离线文件",
+            current=0, total=1, unit="file",
+        )
+        ArchiveRenderer(repository).render_all(
+            self.root,
+            include_pdf=False,
+            cancel_requested=self.cancel_requested,
+            pause_requested=self.pause_requested,
+        )
+        self._layout_migrated_fs = False
 
     def _reconcile_committing(
         self, repository: ArchiveRepository
@@ -864,6 +1038,7 @@ class PersonalArchiveSync:
             raise WeiboError("同步提交状态损坏", kind=WeiboErrorKind.PARSE)
         repository.update_manifest_success(successful_at)
         repository.finish_sync(pending.run_id, "done", summary)
+        self._write_history_state(repository, pending.checkpoint)
         if pending.checkpoint.get("promotion") is None:
             self._cleanup_empty_run_work(repository._root, pending.run_id)
         return SyncResult(
@@ -984,9 +1159,15 @@ class PersonalArchiveSync:
             self._check_cancelled()
             saved_plan = self._saved_plan(checkpoint) if previous is not None else None
             if saved_plan is None:
-                pending, new_bids, refresh_bids, profile_metadata = self._discover(
-                    repository, run_id, checkpoint, mode, uid
-                )
+                with self.timings.measure("discover"):
+                    if self.include_supertopics and mode == "incremental":
+                        pending, new_bids, refresh_bids, profile_metadata = [], [], [], {}
+                    else:
+                        pending, new_bids, refresh_bids, profile_metadata = self._discover(
+                            repository, run_id, checkpoint, mode, uid
+                        )
+                    self._supplement_topics(repository, run_id, checkpoint, mode, uid,
+                                            pending, new_bids, profile_metadata)
                 checkpoint["pending_bids"] = pending
                 checkpoint["new_bids"] = new_bids
                 checkpoint["refresh_bids"] = refresh_bids
@@ -994,6 +1175,7 @@ class PersonalArchiveSync:
                 repository.update_sync_checkpoint(run_id, checkpoint)
             else:
                 pending, new_bids, refresh_bids, profile_metadata = saved_plan
+                self.supertopic_result = checkpoint.get("supertopic_summary", {})
             if self.pacing_scheduler is not None:
                 self.pacing_scheduler.set_known_remaining(
                     posts=sum(1 for bid in pending if bid not in completed)
@@ -1035,8 +1217,24 @@ class PersonalArchiveSync:
                 completed.add(bid)
 
             self._check_cancelled()
+            def quality_progress(current: int, total: int) -> None:
+                self._emit_progress(
+                    "media", 0.89, f"正在更新旧视频画质 {current}/{total}",
+                    current=current, total=total, unit="video",
+                )
+            video_quality.apply_selected(
+                repository, self.source, run_id, self.video_upgrade_limit,
+                self._download_post_video, cancel_requested=self._check_quality_control,
+                progress=quality_progress,
+            )
+            self._save_topic_sources(repository, checkpoint)
+            # 媒体补抓属于同步阶段，必须在标记成功之前完成；暂停时保留恢复点。
+            self._record_history_observations(
+                repository, run_id, uid, _utc_now(), checkpoint
+            )
+            self._check_cancelled()
             self._emit_progress(
-                "generate", 0.90, "正在提交归档索引",
+                "generate", 0.95, "正在提交归档索引",
                 current=0, total=1, unit="archive",
             )
             successful_at = _utc_now()
@@ -1051,6 +1249,7 @@ class PersonalArchiveSync:
             committing = True
             repository.update_manifest_success(successful_at)
             repository.finish_sync(run_id, "done", summary)
+            self._write_history_state(repository, checkpoint)
             self._emit_progress(
                 "generate", 0.95, "归档索引已提交",
                 current=1, total=1, unit="archive",
@@ -1084,6 +1283,709 @@ class PersonalArchiveSync:
                 except OSError:
                     pass
 
+    def _supplement_topics(self, repository, run_id, checkpoint, mode, uid, pending, new_bids, metadata):
+        stored = repository._read_meta(SUPERTOPIC_STATE_KEY)
+        enabled = isinstance(stored, dict) and stored.get("enabled") is True
+        # 自动补漏：普通备份一律尝试发现该博主超话来源；不可用结果冷却期内不再重试，
+        # 只有手动「超话补漏」按钮（include_supertopics）绕过冷却并在不可用时抛错。
+        if not self.include_supertopics and not enabled and _supertopic_in_cooldown(stored):
+            return
+        factory = getattr(self.source, "supertopic_source", None)
+        if not callable(factory):
+            if not self.include_supertopics and not enabled:
+                return
+            raise WeiboError("当前数据源未提供超话补漏入口", kind=WeiboErrorKind.API)
+        scan_state = checkpoint.setdefault("supertopic_scan", {})
+        if not isinstance(scan_state, dict):
+            raise WeiboError("超话检查恢复记录损坏", kind=WeiboErrorKind.PARSE)
+        saved_cutoff = _parse_checkpoint_cutoff(checkpoint)
+        cutoff = (
+            saved_cutoff if saved_cutoff is not _CUTOFF_MISSING
+            else repository.read_history_cutoff()
+        )
+        cutoff_date = cutoff if isinstance(cutoff, date) else None
+        def save():
+            repository.update_sync_checkpoint(run_id, checkpoint)
+        def progress(*, pages, found, name):
+            self._emit_progress("discover", 0.12,
+                f"正在检查{name} · 已检查 {pages} 页 · 发现该博主 {found} 条微博",
+                current=pages, total=None, unit="page", subphase="supertopic")
+        try:
+            with self.timings.measure("supertopic"):
+                scanned = factory(uid).scan(scan_state, save=save, progress=progress,
+                                           check_control=self._check_cancelled, cutoff=cutoff_date)
+        except SupertopicUnavailable as exc:
+            if self.include_supertopics:
+                raise
+            checkpoint["supertopic_unavailable"] = str(exc)
+            if enabled:
+                self.supertopic_result = {"status": "unavailable", "message": str(exc)}
+            save()
+            return
+        except WeiboError as exc:
+            # 自动补漏是附加检查：暂时性失败（限流波动、解析异常等）不拖垮主备份，
+            # 保留既有补漏状态，下一次备份自动重试；手动「超话补漏」按钮照常抛错。
+            if self.include_supertopics:
+                raise
+            checkpoint["supertopic_error"] = str(exc)
+            self.supertopic_result = {"status": "error", "message": str(exc)}
+            save()
+            return
+        known = repository.list_known_bids()
+        count = 0
+        added = []
+        for bid in scanned["posts"]:
+            if bid in known or bid in pending:
+                continue
+            pending.append(bid)
+            new_bids.append(bid)
+            metadata[bid] = {"is_pinned": False, "pin_order": None}
+            count += 1
+            added.append(bid)
+        checkpoint["supertopic_new_bids"] = added
+        self.supertopic_result = {"found": len(scanned["posts"]), "new": count,
+                                  "duplicate": len(scanned["posts"]) - count,
+                                  "pages": scanned["pages"], "complete": scanned["complete"]}
+        checkpoint["supertopic_summary"] = self.supertopic_result
+        checkpoint["supertopic_coverage"] = {
+            "cutoff": cutoff.isoformat() if isinstance(cutoff, date) else None,
+            "sources": scanned["sources"],
+        }
+        save()
+
+    def _save_topic_sources(self, repository, checkpoint):
+        if "supertopic_error" in checkpoint:
+            return
+        if "supertopic_unavailable" in checkpoint:
+            previous = repository._read_meta(SUPERTOPIC_STATE_KEY)
+            previous = previous if isinstance(previous, dict) else {}
+            previous.update({"enabled": False, "status": "unavailable",
+                             "message": checkpoint["supertopic_unavailable"],
+                             "checked_at": _utc_now()})
+            repository._write_meta(SUPERTOPIC_STATE_KEY, previous)
+            return
+        if "supertopic_scan" not in checkpoint:
+            return
+        scan = checkpoint["supertopic_scan"]
+        coverage = checkpoint["supertopic_coverage"]
+        previous = repository._read_meta(SUPERTOPIC_STATE_KEY)
+        previous = previous if isinstance(previous, dict) else {}
+        origins = dict(previous.get("post_sources", {}))
+        known = repository.list_known_bids()
+        self.supertopic_result["new"] = sum(bid in known for bid in checkpoint.get("supertopic_new_bids", []))
+        for bid, record in scan["posts"].items():
+            if bid not in known:
+                continue
+            origins[bid] = list(dict.fromkeys([*origins.get(bid, []), *record["topics"]]))
+        # 超话独占 = sync_mblog=false（只发超话、未同步微博主页），且仅适用于补漏新增或已标记独占的
+        # 微博；主页发现阶段看到同一 bid 一律解除独占。补漏新增但同步到主页的微博留在主流。
+        scan_records = scan["posts"]
+        newly_added = [bid for bid in checkpoint.get("supertopic_new_bids", []) if bid in known]
+        profile_seen = (set(checkpoint.get("new_bids", [])) | set(checkpoint.get("refresh_bids", []))) - set(newly_added)
+        previous_exclusive = previous.get("exclusive_bids", [])
+        if not isinstance(previous_exclusive, list):
+            previous_exclusive = []
+        exclusive = []
+        for bid in previous_exclusive:
+            if not isinstance(bid, str) or bid not in known or bid in profile_seen:
+                continue
+            record = scan_records.get(bid)
+            if record is None or (isinstance(record, dict) and record.get("synced") is False):
+                exclusive.append(bid)
+        for bid in newly_added:
+            record = scan_records.get(bid)
+            if (bid not in exclusive and bid not in profile_seen
+                    and isinstance(record, dict) and record.get("synced") is False):
+                exclusive.append(bid)
+        # 「TA在超话」来源是超话归属的服务端权威视图：完整重扫后，此前由名人动态
+        # 频道误标到该超话、但本次权威结果中不存在的微博，自动解除该超话标注。
+        if self.supertopic_result.get("complete", False):
+            authoritative = {x.get("id") for x in coverage.get("sources", [])
+                             if isinstance(x, dict) and x.get("kind") == "profile_inpage"}
+            if authoritative:
+                for bid in list(origins):
+                    topics = origins[bid]
+                    if not isinstance(topics, list):
+                        del origins[bid]
+                        continue
+                    record = scan_records.get(bid)
+                    record_topics = record.get("topics", []) if isinstance(record, dict) else []
+                    kept = [t for t in topics if t not in authoritative or t in record_topics]
+                    if kept != topics:
+                        if kept:
+                            origins[bid] = kept
+                        else:
+                            del origins[bid]
+        repository._write_meta(SUPERTOPIC_STATE_KEY, {
+            "enabled": True, "verified": True, "complete": self.supertopic_result.get("complete", False),
+            "cutoff": coverage["cutoff"], "sources": coverage["sources"],
+            "post_sources": origins, "exclusive_bids": exclusive, "checked_at": _utc_now(),
+        })
+
+    def _write_history_state(
+        self,
+        repository: ArchiveRepository,
+        checkpoint: dict[str, object],
+    ) -> None:
+        """把发现阶段确定的历史截止/完整性写回归档设置；失败不影响备份结果。"""
+        raw = checkpoint.get("history_writeback")
+        if raw is None:
+            return
+        try:
+            if (
+                not isinstance(raw, dict)
+                or set(raw) != {"cutoff", "complete"}
+                or type(raw["complete"]) is not bool
+                or not (raw["cutoff"] is None or isinstance(raw["cutoff"], str))
+            ):
+                raise WeiboError("历史状态恢复点已损坏", kind=WeiboErrorKind.PARSE)
+            repository.write_history_cutoff(raw["cutoff"])
+            repository.write_history_complete(raw["complete"])
+        except Exception as exc:
+            logger.warning("写回历史截止状态失败，不影响本次备份结果: %s", exc)
+
+    def _check_quality_control(self) -> bool:
+        self._check_cancelled()
+        return False
+
+    def _record_history_observations(
+        self,
+        repository: ArchiveRepository,
+        run_id: str,
+        uid: str,
+        observed_at: str,
+        checkpoint: dict[str, object],
+    ) -> None:
+        """同步成功收尾时记录置顶观察与头像/封面；失败不影响备份结果。"""
+        try:
+            self._record_pin_observation(repository, run_id, observed_at, checkpoint)
+        except (OperationCancelled, OperationPaused):
+            raise
+        except Exception as exc:
+            logger.warning("记录置顶观察失败，不影响本次备份结果: %s", exc)
+        self._emit_progress("media", 0.89, "正在更新头像、封面与资料记录",
+                            current=0, total=None, unit="media", subphase="profile")
+        try:
+            with self.timings.measure("profile"):
+                self._record_profile_assets(repository, uid, run_id, observed_at)
+        except (OperationCancelled, OperationPaused):
+            raise
+        except Exception as exc:
+            logger.warning("记录头像与封面失败，不影响本次备份结果: %s", exc)
+        try:
+            with self.timings.measure("media"):
+                self._backfill_missing_videos(repository, uid, run_id)
+        except (OperationCancelled, OperationPaused):
+            raise
+        except Exception as exc:
+            logger.warning("补抓历史视频失败，不影响本次备份结果: %s", exc)
+        try:
+            with self.timings.measure("live_replay"):
+                self._backfill_live_replays(repository, uid, run_id)
+        except (OperationCancelled, OperationPaused):
+            raise
+        except Exception as exc:
+            logger.warning("补抓直播回放失败，不影响本次备份结果: %s", exc)
+
+    _VIDEO_BACKFILL_BATCH = 50
+
+    def _backfill_missing_videos(
+        self, repository: ArchiveRepository, uid: str, run_id: str,
+    ) -> None:
+        """正常备份只补抓缺失文件；旧视频画质替换由用户单独选择。"""
+        fetch = getattr(self.source, "fetch_post", None)
+        if fetch is None:
+            return
+        for bid, _created_at in repository.list_posts_missing_video()[:self._VIDEO_BACKFILL_BATCH]:
+            try:
+                post = fetch(uid, bid)
+                year_month = media_year_month(post.created_at)
+                if year_month is None:
+                    continue
+                for position, item in enumerate(post.media):
+                    if item.type is not MediaType.VIDEO or not item.url:
+                        continue
+                    local_path, digest = self._download_post_video(
+                        repository.paths, bid, position, item.url, year_month
+                    )
+                    record = MediaRecord("post", bid, "video", position, item.url, local_path, digest)
+                    repository.upsert_media(record)
+                    proof = getattr(self.source, "verified_video_url", None)
+                    if callable(proof) and proof(bid) == item.url:
+                        video_quality.remember_verified(repository, record)
+            except (OperationCancelled, OperationPaused):
+                raise
+            except Exception as exc:
+                logger.warning("补抓微博 %s 视频失败，留待重试: %s", bid, exc)
+
+    def _download_post_video(
+        self,
+        paths: ArchivePaths,
+        bid: str,
+        position: int,
+        url: str,
+        year_month: tuple[str, str],
+    ) -> tuple[str, str]:
+        """下载微博视频到内容寻址文件，返回 (相对路径, sha256)；命名与正常同步一致。"""
+        directory = paths.media_root / MEDIA_SUBDIR_RENAMES["posts"] / year_month[0] / year_month[1]
+        directory.mkdir(parents=True, exist_ok=True)
+        for path in (paths.root, paths.assets_dir, paths.media_root, directory):
+            marker = path.lstat()
+            if stat.S_ISLNK(marker.st_mode) or not stat.S_ISDIR(marker.st_mode):
+                raise WeiboError("视频归档目录不安全", kind=WeiboErrorKind.API)
+        extension = get_extension(url, MediaType.VIDEO)
+        staging = directory / f".video-backfill-{uuid.uuid4().hex}.tmp"
+        try:
+            with httpx.Client(
+                follow_redirects=True, timeout=httpx.Timeout(120.0)
+            ) as client:
+                downloaded = download_file(
+                    client, url, staging,
+                    cancel_event=_CancelRequestedEvent(self.cancel_requested),
+                )
+            if not downloaded:
+                raise WeiboError("视频下载失败", kind=WeiboErrorKind.NETWORK)
+            digest = hashlib.sha256()
+            with staging.open("rb") as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(block)
+            final = directory / f"{bid}_video_{position}_{digest.hexdigest()}.{extension}"
+            if final.exists():
+                marker = final.lstat()
+                if stat.S_ISLNK(marker.st_mode) or not stat.S_ISREG(marker.st_mode):
+                    raise WeiboError("视频内容寻址文件冲突", kind=WeiboErrorKind.API)
+                staging.unlink()
+            else:
+                os.replace(staging, final)
+            _fsync_directory(directory)
+        finally:
+            try:
+                staging.unlink()
+            except FileNotFoundError:
+                pass
+        relative = (
+            f"{MEDIA_ROOT_NAME}/{MEDIA_SUBDIR_RENAMES['posts']}"
+            f"/{year_month[0]}/{year_month[1]}/{final.name}"
+        )
+        if media_path_shape(relative) is None:
+            raise WeiboError("视频归档路径形状不安全", kind=WeiboErrorKind.API)
+        return relative, digest.hexdigest()
+
+    _LIVE_REPLAY_BATCH = 5
+
+    def _backfill_live_replays(
+        self,
+        repository: ArchiveRepository,
+        uid: str,
+        run_id: str,
+    ) -> None:
+        """补抓直播微博的回放视频（HLS 分段）。
+
+        直播卡片只带落地页链接，回放地址走 PC ``show_pc_live.json``
+        接口；回放是 m3u8 + ts 分段，平铺保存在微博图片的年-月目录，
+        分段以 ``live_replay_segment`` 角色落库，防止被无引用清理删除。
+        每次同步最多处理 ``_LIVE_REPLAY_BATCH`` 场，失败只告警；
+        平台无回放的直播记入确认名单，不再重复抓取。
+        """
+        fetch = getattr(self.source, "fetch_live_replay", None)
+        if fetch is None:
+            return
+        pending = repository.list_live_posts_without_replay()
+        if not pending:
+            return
+        batch = pending[: self._LIVE_REPLAY_BATCH]
+        logger.info(
+            "检测到 %d 场直播待补抓回放，本次处理 %d 场",
+            len(pending), len(batch),
+        )
+        for position, (bid, created_at, link_card_json) in enumerate(batch, 1):
+            self._check_cancelled()
+            self._live_replay_position = (position, len(batch))
+            self._emit_progress("media", 0.90, f"正在读取直播回放 {position}/{len(batch)} 的分段清单",
+                                current=0, total=None, unit="segment", subphase="live_replay")
+            try:
+                self._backfill_one_live_replay(
+                    repository, fetch, bid, created_at, link_card_json
+                )
+            except OperationCancelled:
+                raise
+            except OperationPaused:
+                raise
+            except WeiboError as exc:
+                if exc.kind in {WeiboErrorKind.AUTH, WeiboErrorKind.RATE_LIMIT}:
+                    raise OperationPaused("直播回放请求需要处理登录或限流状态，任务已暂停",
+                                          pause_reason="authentication_required" if exc.kind is WeiboErrorKind.AUTH else "rate_limited") from exc
+                logger.warning("补抓直播回放 %s 失败，跳过: %s", bid, exc)
+            except Exception as exc:
+                logger.warning("补抓直播回放 %s 失败，跳过: %s", bid, exc)
+
+    def _backfill_one_live_replay(
+        self,
+        repository: ArchiveRepository,
+        fetch,
+        bid: str,
+        created_at: str,
+        link_card_json: str,
+    ) -> None:
+        try:
+            link_card = json.loads(link_card_json)
+        except ValueError:
+            link_card = {}
+        page_url = link_card.get("url") if isinstance(link_card, dict) else None
+        if parse_live_id(page_url) is None:
+            # 非微博直播落地页（如一直播外链），没有可取回放的接口
+            repository.confirm_live_replay_unavailable(bid)
+            return
+        replay = fetch(page_url)
+        if replay is None:
+            repository.confirm_live_replay_unavailable(bid)
+            return
+        year_month = media_year_month(created_at)
+        if year_month is None:
+            logger.warning("微博 %s 缺少发布时间，跳过直播回放补抓", bid)
+            return
+        self._download_live_replay(
+            repository, bid, replay["replay_url"], year_month
+        )
+
+    def _download_live_replay(
+        self,
+        repository: ArchiveRepository,
+        bid: str,
+        replay_url: str,
+        year_month: tuple[str, str],
+    ) -> None:
+        """下载整场直播回放到年-月目录（全部成功后统一落盘），并落库媒体记录。"""
+        paths = repository.paths
+        directory = paths.media_root / MEDIA_SUBDIR_RENAMES["posts"] / year_month[0] / year_month[1]
+        directory.mkdir(parents=True, exist_ok=True)
+        for path in (paths.root, paths.assets_dir, paths.media_root, directory):
+            marker = path.lstat()
+            if stat.S_ISLNK(marker.st_mode) or not stat.S_ISDIR(marker.st_mode):
+                raise WeiboError("直播回放归档目录不安全", kind=WeiboErrorKind.API)
+        staging = directory / f".live-{uuid.uuid4().hex}.tmp"
+        staging.mkdir()
+        path_prefix = (
+            f"{MEDIA_ROOT_NAME}/{MEDIA_SUBDIR_RENAMES['posts']}"
+            f"/{year_month[0]}/{year_month[1]}"
+        )
+        try:
+            def control_requested():
+                self._check_cancelled()
+                return False
+            cancel = _CancelRequestedEvent(control_requested)
+            with httpx.Client(
+                follow_redirects=True, timeout=httpx.Timeout(120.0)
+            ) as client:
+                raw_playlist = staging / "playlist.m3u8"
+                def fetch_playlist():
+                    if not download_file(client, replay_url, raw_playlist, cancel_event=cancel,
+                                         raise_request_errors=True,
+                                         max_retries=0 if self.pacing_scheduler is not None and self.pacing_scheduler.is_low_intensity else 2):
+                        raise WeiboError("直播回放播放列表下载失败", kind=WeiboErrorKind.NETWORK)
+                if self.pacing_scheduler is not None and self.pacing_scheduler.is_low_intensity:
+                    self.pacing_scheduler.add_media_requests(1)
+                    self.pacing_scheduler.run("media", fetch_playlist)
+                else:
+                    with self.timings.measure("request"):
+                        fetch_playlist()
+                text = raw_playlist.read_text(encoding="utf-8", errors="replace")
+                if not text.lstrip().startswith("#EXTM3U"):
+                    raise WeiboError("直播回放播放列表无效", kind=WeiboErrorKind.PARSE)
+                segments = parse_m3u8_segments(text)
+                if not segments or len(segments) > MAX_REPLAY_SEGMENTS:
+                    raise WeiboError("直播回放分段数量异常", kind=WeiboErrorKind.PARSE)
+                lid = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+                seg_names = [
+                    f"{bid}_live_{lid}_seg{index:04d}.ts"
+                    for index in range(len(segments))
+                ]
+                position, replay_total = getattr(self, "_live_replay_position", (1, 1))
+                def segment_progress(event):
+                    self._emit_progress(
+                        "media", 0.90 + 0.04 * ((position - 1 + event["current"] / event["total"]) / replay_total),
+                        f"直播回放 {position}/{replay_total} · 分段 {event['current']}/{event['total']}",
+                        current=event["current"], total=event["total"], unit="segment",
+                        subphase="live_replay", completed_bytes=event["completed_bytes"],
+                    )
+                batch = download_replay_segments(
+                    paths.data_dir / ".live-replay-cache", replay_url, text, seg_names,
+                    client=client, download=download_file, check_control=self._check_cancelled,
+                    progress=segment_progress, scheduler=self.pacing_scheduler, timings=self.timings,
+                )
+                seg_urls = list(batch.urls)
+                rewritten = rewrite_m3u8(text, seg_names)
+                digest = hashlib.sha256(rewritten.encode("utf-8")).hexdigest()
+                playlist_name = f"{bid}_live_{lid}.m3u8"
+                (staging / playlist_name).write_text(rewritten, encoding="utf-8")
+                raw_playlist.unlink()
+                for name in [playlist_name, *seg_names]:
+                    final = directory / name
+                    self._check_cancelled()
+                    source_path = staging / name if name == playlist_name else batch.directory / name
+                    if final.exists() or final.is_symlink():
+                        if file_proof(final, self._check_cancelled) != file_proof(source_path, self._check_cancelled):
+                            raise WeiboError("直播回放内容寻址文件冲突", kind=WeiboErrorKind.API)
+                        if name == playlist_name:
+                            source_path.unlink()
+                    else:
+                        if name != playlist_name:
+                            copied = staging / name
+                            copy_verified_file(source_path, copied, self._check_cancelled)
+                            source_path = copied
+                        os.replace(source_path, final)
+                _fsync_directory(directory)
+            playlist_relative = f"{path_prefix}/{playlist_name}"
+            if media_path_shape(playlist_relative) is None:
+                raise WeiboError("直播回放归档路径形状不安全", kind=WeiboErrorKind.API)
+            with repository.transaction():
+                repository.upsert_media(
+                    MediaRecord("post", bid, "live_replay", 900, replay_url, playlist_relative, digest)
+                )
+                for index, (seg_url, name) in enumerate(zip(seg_urls, seg_names)):
+                    repository.upsert_media(
+                        MediaRecord(
+                            "post", bid, "live_replay_segment", 1000 + index,
+                            seg_url, f"{path_prefix}/{name}", "",
+                        )
+                    )
+            shutil.rmtree(batch.directory)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
+    @staticmethod
+    def _record_pin_observation(
+        repository: ArchiveRepository,
+        run_id: str,
+        observed_at: str,
+        checkpoint: dict[str, object],
+    ) -> None:
+        raw = checkpoint.get("pin_observation")
+        if raw is None:
+            return
+        if not isinstance(raw, list):
+            raise WeiboError("置顶观察恢复点已损坏", kind=WeiboErrorKind.PARSE)
+        items: list[tuple[str, int | None]] = []
+        for entry in raw:
+            if (
+                not isinstance(entry, list)
+                or len(entry) != 2
+                or not isinstance(entry[0], str)
+                or not entry[0]
+                or not (
+                    entry[1] is None
+                    or (type(entry[1]) is int and entry[1] > 0)
+                )
+            ):
+                raise WeiboError("置顶观察恢复点已损坏", kind=WeiboErrorKind.PARSE)
+            items.append((entry[0], entry[1]))
+        repository.record_pin_observations(run_id, observed_at, items)
+
+    def _record_profile_assets(
+        self,
+        repository: ArchiveRepository,
+        uid: str,
+        run_id: str,
+        observed_at: str,
+    ) -> None:
+        fetch = getattr(self.source, "fetch_profile_assets", None)
+        if fetch is None:
+            return
+        avatar_url, cover_url, followers_count = fetch(uid)
+        if followers_count is not None:
+            repository.record_fans_observation(run_id, observed_at, followers_count)
+        for kind, url in (("avatar", avatar_url), ("cover", cover_url)):
+            self._record_one_profile_asset(
+                repository, run_id, kind, url, observed_at
+            )
+            repository.set_current_profile_asset(kind, url)
+        self._backfill_cover_list(repository, uid, run_id, observed_at)
+        self._backfill_avatar_album(repository, uid, run_id, observed_at)
+
+    def _backfill_cover_list(
+        self,
+        repository: ArchiveRepository,
+        uid: str,
+        run_id: str,
+        observed_at: str,
+    ) -> None:
+        """把账号当前设置的全部主页封面（多张轮换）补入 profile_assets。"""
+        fetch_covers = getattr(self.source, "fetch_cover_list", None)
+        if fetch_covers is None:
+            return
+        try:
+            cover_urls = fetch_covers(uid)
+        except Exception as exc:
+            logger.warning("读取封面列表失败，跳过封面相册补抓: %s", exc)
+            return
+        for url in cover_urls:
+            try:
+                self._record_one_profile_asset(
+                    repository, run_id, "cover", url, observed_at
+                )
+            except OperationCancelled:
+                return
+
+    def _record_one_profile_asset(
+        self,
+        repository: ArchiveRepository,
+        run_id: str,
+        kind: str,
+        url: object,
+        first_seen_at: str,
+    ) -> None:
+        if not isinstance(url, str) or not url.strip():
+            return
+        is_new = repository.record_profile_asset(
+            kind, url, first_seen_at=first_seen_at, run_id=run_id
+        )
+        if not is_new:
+            existing = next(
+                (
+                    asset
+                    for asset in repository.list_profile_assets(kind)
+                    if profile_asset_identity(asset.remote_url) == profile_asset_identity(url)
+                ),
+                None,
+            )
+            # 已有本地文件的记录跳过；上次下载失败（local_path 为空）的重试
+            if existing is None or existing.local_path:
+                return
+        try:
+            local_path, digest = self._download_profile_asset(
+                repository.paths, kind, url
+            )
+        except OperationCancelled:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "下载%s失败，仅记录链接: %s",
+                "头像" if kind == "avatar" else "封面",
+                exc,
+            )
+            return
+        repository.record_profile_asset(
+            kind,
+            url,
+            local_path=local_path,
+            sha256=digest,
+            first_seen_at=first_seen_at,
+            run_id=run_id,
+        )
+
+    def _backfill_avatar_album(
+        self,
+        repository: ArchiveRepository,
+        uid: str,
+        run_id: str,
+        observed_at: str,
+    ) -> None:
+        """把「头像相册」里的历史头像去重补入 profile_assets。"""
+        fetch_album = getattr(self.source, "fetch_avatar_album", None)
+        if fetch_album is None:
+            return
+        try:
+            album_photos = fetch_album(uid)
+        except Exception as exc:
+            logger.warning("拉取头像相册失败，跳过历史头像补抓: %s", exc)
+            return
+        for url, uploaded_at in album_photos:
+            try:
+                self._record_one_profile_asset(
+                    repository,
+                    run_id,
+                    "avatar",
+                    url,
+                    uploaded_at or observed_at,
+                )
+            except OperationCancelled:
+                return
+
+    def _download_profile_asset(
+        self, paths: ArchivePaths, kind: str, url: str
+    ) -> tuple[str, str]:
+        """下载头像/封面到内容寻址文件，返回 (相对路径, sha256)。"""
+        directory_name = (
+            MEDIA_SUBDIR_RENAMES["avatars"]
+            if kind == "avatar"
+            else MEDIA_SUBDIR_RENAMES["covers"]
+        )
+        directory = paths.media_root / directory_name
+        directory.mkdir(parents=True, exist_ok=True)
+        for path in (paths.root, paths.assets_dir, paths.media_root, directory):
+            marker = path.lstat()
+            if stat.S_ISLNK(marker.st_mode) or not stat.S_ISDIR(marker.st_mode):
+                raise WeiboError("资料媒体目录不安全", kind=WeiboErrorKind.API)
+        extension = get_extension(url, MediaType.IMAGE)
+        staging = directory / f".profile-asset-{uuid.uuid4().hex}.tmp"
+        try:
+            with httpx.Client(
+                follow_redirects=True, timeout=httpx.Timeout(120.0)
+            ) as client:
+                downloaded = download_file(
+                    client, url, staging,
+                    cancel_event=_CancelRequestedEvent(self.cancel_requested),
+                )
+            if not downloaded:
+                raise WeiboError("资料媒体下载失败", kind=WeiboErrorKind.NETWORK)
+            digest = hashlib.sha256()
+            with staging.open("rb") as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(block)
+            final = directory / f"{digest.hexdigest()[:16]}.{extension}"
+            if final.exists():
+                marker = final.lstat()
+                if stat.S_ISLNK(marker.st_mode) or not stat.S_ISREG(marker.st_mode):
+                    raise WeiboError("资料媒体内容寻址文件冲突", kind=WeiboErrorKind.API)
+                staging.unlink()
+            else:
+                os.replace(staging, final)
+            _fsync_directory(directory)
+        finally:
+            try:
+                staging.unlink()
+            except FileNotFoundError:
+                pass
+        relative = f"{MEDIA_ROOT_NAME}/{directory_name}/{final.name}"
+        if media_path_shape(relative) is None:
+            raise WeiboError("资料媒体路径形状不安全", kind=WeiboErrorKind.API)
+        return relative, digest.hexdigest()
+
+    def _resolve_backfill_cutoff(
+        self,
+        repository: ArchiveRepository,
+        checkpoint: dict[str, object],
+    ) -> date | None:
+        """确定本次回填的目标截止日；恢复点已有记录时直接沿用（暂停/恢复口径不变）。"""
+        saved = _parse_checkpoint_cutoff(checkpoint)
+        if saved is not _CUTOFF_MISSING:
+            return saved
+        existing = repository.read_history_cutoff()
+        if existing is None:
+            raise WeiboError(
+                "该微博书历史已补全，无需回填", kind=WeiboErrorKind.API
+            )
+        if self.backfill_months is None:
+            raise WeiboError("分段回填缺少回填范围", kind=WeiboErrorKind.API)
+        base = date.fromisoformat(existing)
+        target = None if self.backfill_months == 0 else _months_ago(base, self.backfill_months)
+        checkpoint["history_cutoff"] = target.isoformat() if target is not None else None
+        return target
+
+    def _resolve_create_cutoff(
+        self,
+        checkpoint: dict[str, object],
+    ) -> date | None:
+        """确定首次建档的历史截止日；恢复点已有记录时直接沿用。"""
+        saved = _parse_checkpoint_cutoff(checkpoint)
+        if saved is not _CUTOFF_MISSING:
+            return saved
+        if not self.range_months:
+            return None
+        target = _months_ago(date.today(), self.range_months)
+        checkpoint["history_cutoff"] = target.isoformat()
+        return target
+
     def _discover(
         self,
         repository: ArchiveRepository,
@@ -1103,10 +2005,19 @@ class PersonalArchiveSync:
 
         def pages() -> Iterator[ProfilePage]:
             nonlocal pages_completed
+            first_page = True
             for value in self.source.iter_profile_pages(uid):
                 self._check_cancelled()
                 pages_completed += 1
                 checkpoint["pages_completed"] = pages_completed
+                if first_page:
+                    first_page = False
+                    # 置顶永远在第 1 页；只有真正翻到第 1 页才记录本次观察
+                    checkpoint["pin_observation"] = [
+                        [item.bid, item.pin_order]
+                        for item in value.items
+                        if item.is_pinned
+                    ]
                 repository.update_sync_checkpoint(run_id, checkpoint)
                 self._emit_progress(
                     "discover", 0.08, f"已发现 {pages_completed} 页",
@@ -1115,6 +2026,31 @@ class PersonalArchiveSync:
                 yield value
 
         known = repository.list_known_bids()
+        if mode == "backfill":
+            cutoff = self._resolve_backfill_cutoff(repository, checkpoint)
+            discovered = discover_backfill(
+                pages(), known, cutoff, refresh_limit=_INCREMENTAL_REFRESH_LIMIT
+            )
+            complete = discovered.exhausted or cutoff is None
+            checkpoint["history_writeback"] = {
+                "cutoff": None if complete else cutoff.isoformat(),
+                "complete": complete,
+            }
+            repository.update_sync_checkpoint(run_id, checkpoint)
+            # 回填只追老：已知 BID 只计数，不做「最近 5 条复查」之外的刷新
+            pending = discovered.new_bids + discovered.refresh_bids
+            return (
+                pending,
+                discovered.new_bids,
+                list(discovered.refresh_bids),
+                {
+                    bid: {
+                        "is_pinned": discovered.profile_metadata[bid].is_pinned,
+                        "pin_order": discovered.profile_metadata[bid].pin_order,
+                    }
+                    for bid in pending
+                },
+            )
         if mode == "incremental":
             discovered = discover_incremental(
                 pages(), known, refresh_limit=_INCREMENTAL_REFRESH_LIMIT
@@ -1201,11 +2137,20 @@ class PersonalArchiveSync:
                 pin_orders=pin_orders,
                 next_pin_order=next_pin_order,
             )
+        cutoff = self._resolve_create_cutoff(checkpoint)
+        if cutoff is not None:
+            # 截止日先行落进恢复点：暂停/恢复后口径不变
+            repository.update_sync_checkpoint(run_id, checkpoint)
         seen = set(discovered)
         page_number = start_page
+        exhausted = False
         for profile_page in pages:
+            terminal = page_reaches_cutoff(profile_page, cutoff)
             for item in profile_page.items:
                 if item.bid in seen:
+                    continue
+                if terminal and item_before_cutoff(item, cutoff):
+                    # 该页内早于截止日的条目不收
                     continue
                 seen.add(item.bid)
                 discovered.append(item.bid)
@@ -1216,6 +2161,13 @@ class PersonalArchiveSync:
                 if item.is_pinned and item.pin_order is not None:
                     pin_orders[item.bid] = item.pin_order
                     next_pin_order = max(next_pin_order, item.pin_order + 1)
+            if page_number == 1:
+                # 置顶永远在第 1 页；只有真正翻到第 1 页才记录本次观察
+                checkpoint["pin_observation"] = [
+                    [item.bid, item.pin_order]
+                    for item in profile_page.items
+                    if item.is_pinned
+                ]
             page_number += 1
             checkpoint["pages_completed"] = page_number - 1
             checkpoint["discovered_bids"] = list(discovered)
@@ -1232,8 +2184,17 @@ class PersonalArchiveSync:
                 unit="page",
             )
             self._check_cancelled()
-            if profile_page.is_last:
+            if terminal:
                 break
+            if profile_page.is_last:
+                exhausted = True
+                break
+        complete = exhausted or cutoff is None
+        checkpoint["history_writeback"] = {
+            "cutoff": None if complete else cutoff.isoformat(),
+            "complete": complete,
+        }
+        repository.update_sync_checkpoint(run_id, checkpoint)
         return discovered, list(discovered), [], normalized_metadata
 
     def _saved_plan(
@@ -1384,8 +2345,11 @@ class PersonalArchiveSync:
         def phase_pct(offset: int) -> float:
             return base + span * (((current - 1) * 3 + offset) / denominator)
 
+        self._emit_progress("extract", phase_pct(0), f"正在读取微博 {current}/{total}",
+                            current=current - 1, total=total, unit="post", subphase="detail")
         try:
-            post = self.source.fetch_post(uid, bid)
+            with self.timings.measure("detail"):
+                post = self.source.fetch_post(uid, bid)
         except WeiboError as exc:
             if exc.kind is not WeiboErrorKind.NOT_FOUND:
                 raise
@@ -1465,28 +2429,47 @@ class PersonalArchiveSync:
         pin_order = profile_metadata["pin_order"]
         post.pin_order = pin_order if isinstance(pin_order, int) else None
 
-        comments = self.source.fetch_recent_comments(
-            post.raw_bid or post.bid, limit=10
-        )[:10]
+        self._emit_progress("extract", phase_pct(1), f"正在读取微博 {current}/{total} 的评论",
+                            current=current - 1, total=total, unit="post", subphase="comments")
+        with self.timings.measure("comments"):
+            comments = self.source.fetch_recent_comments(
+                post.raw_bid or post.bid, limit=10
+            )[:10]
         self._emit_progress(
             "comments", phase_pct(2), f"已处理 {current}/{total} 条微博的评论",
             current=current, total=total, unit="post",
         )
         self._check_cancelled()
-        staged = (
-            self.media_stager.stage(
-                post,
-                comments,
-                work_root,
-                cancel_requested=self.cancel_requested,
-            )
-            if self.media_stager is not None
-            else []
-        )
+        self._emit_progress("media", phase_pct(2), f"正在处理微博 {current}/{total} 的媒体",
+                            current=0, total=None, unit="media")
+        staged = []
+        if self.media_stager is not None:
+            options = {"cancel_requested": self.cancel_requested}
+            if "progress_callback" in inspect.signature(self.media_stager.stage).parameters:
+                def media_progress(event):
+                    self._emit_progress(
+                        "media", phase_pct(2), f"微博 {current}/{total} · {event['detail']}",
+                        current=event["current"], total=event["total"], unit="media",
+                    )
+                options["progress_callback"] = media_progress
+            with self.timings.measure("media"):
+                staged = self.media_stager.stage(post, comments, work_root, **options)
         self._emit_progress(
             "media", phase_pct(3), f"已处理 {current}/{total} 条微博的媒体",
             current=current, total=total, unit="post",
         )
+        self._emit_progress("media", phase_pct(3), f"正在校验并保存微博 {current}/{total} 的媒体",
+                            current=0, total=len(staged), unit="media", subphase="storage")
+        with self.timings.measure("storage"):
+            result = self._store_processed_post(repository, work_root, run_id, checkpoint,
+                                                pending, completed, post, comments, staged, known, counters)
+        self._emit_progress("media", phase_pct(3), f"微博 {current}/{total} 的媒体已保存",
+                            current=len(staged), total=len(staged), unit="media", subphase="storage")
+        return result
+
+    def _store_processed_post(self, repository, work_root, run_id, checkpoint,
+                              pending, completed, post, comments, staged, known, counters):
+        bid = post.bid
         self._check_cancelled()
         promotion: dict[str, object] | None = None
         promotion_persisted = False
@@ -1497,6 +2480,7 @@ class PersonalArchiveSync:
             if staged:
                 promotion = self._prepare_promotion(
                     repository._root,
+                    repository.paths.assets_dir,
                     work_root,
                     run_id,
                     staged,
@@ -1521,11 +2505,20 @@ class PersonalArchiveSync:
             self._check_cancelled()
             with repository.transaction():
                 change = repository.apply_post_change(post_to_record(post))
-                repository.replace_current_comments(
-                    bid, comments_to_records(bid, comments)
-                )
+                if not comments and repository.has_comments(bid):
+                    # crawl4weibo 在评论接口业务异常时同样返回空列表，无法与“确实没有评论”区分。
+                    # 档案只增不减：保留上次成功读取的评论，不用空结果覆盖。
+                    logger.warning("微博 %s 本次未读到评论，保留档案中已有的评论", bid)
+                else:
+                    repository.replace_current_comments(
+                        bid, comments_to_records(bid, comments)
+                    )
                 for item in staged:
                     repository.upsert_media(item.record)
+                    proof = getattr(self.source, "verified_video_url", None)
+                    if (item.record.role == "video" and callable(proof)
+                            and proof(bid) == item.record.remote_url):
+                        video_quality.remember_verified(repository, item.record)
                 if change.kind == "new":
                     next_counters = replace(
                         counters, new_posts=counters.new_posts + 1
@@ -1555,7 +2548,9 @@ class PersonalArchiveSync:
                         promotion,
                     )
                 elif promotion_applied or promotion_persisted:
-                    self._restore_promotion(repository._root, run_id, promotion)
+                    self._restore_promotion(
+                        repository._root, repository.paths.assets_dir, run_id, promotion
+                    )
                     cleared = dict(checkpoint)
                     cleared["promotion"] = None
                     repository.update_sync_checkpoint(run_id, cleared)
@@ -1592,6 +2587,7 @@ class PersonalArchiveSync:
     def _prepare_promotion(
         self,
         root: Path,
+        media_base: Path,
         work_root: Path,
         run_id: str,
         staged: list[StagedMedia],
@@ -1608,7 +2604,7 @@ class PersonalArchiveSync:
             install_proof = self._install_proof(safe_path)
             expected_target: dict[str, object] = {"state": "missing"}
             if not _SUPPORTS_DIRECTORY_FDS:
-                target_path = self._checked_media_target_path(root, local_path)
+                target_path = self._checked_media_target_path(media_base, local_path)
                 try:
                     marker = target_path.lstat()
                 except FileNotFoundError:
@@ -1626,7 +2622,7 @@ class PersonalArchiveSync:
                         )
                     expected_target = self._target_state(marker)
             else:
-                with self._open_media_parent(root, local_path) as (
+                with self._open_media_parent(media_base, local_path) as (
                     parent_fd,
                     target_name,
                 ):
@@ -1858,13 +2854,14 @@ class PersonalArchiveSync:
             )
             return
         root = repository._root
+        media_base = repository.paths.assets_dir
         for entry in self._promotion_entries(promotion, run_id):
             target = entry["target"]
             staged_path = root / entry["staged"]
             backup_path = root / entry["backup"]
             if self._install_proof(staged_path) != entry["install_proof"]:
                 raise WeiboError("媒体安装源与已持久化内容证明不一致", kind=WeiboErrorKind.API)
-            with self._open_media_parent(root, target) as (
+            with self._open_media_parent(media_base, target) as (
                 parent_fd,
                 target_name,
             ):
@@ -1906,7 +2903,7 @@ class PersonalArchiveSync:
                     finally:
                         os.close(backup_fd)
                 self._install_staged_without_overwrite(
-                    root / target,
+                    media_base / target,
                     staged_path,
                     parent_fd,
                     target_name,
@@ -1939,10 +2936,11 @@ class PersonalArchiveSync:
         promotion: dict[str, object],
     ) -> None:
         root = repository._root
+        media_base = repository.paths.assets_dir
         for entry in self._promotion_entries(promotion, run_id):
             staged_path = root / entry["staged"]
             backup_path = root / entry["backup"]
-            target_path = self._checked_media_target_path(root, entry["target"])
+            target_path = self._checked_media_target_path(media_base, entry["target"])
             if self._install_proof(staged_path) != entry["install_proof"]:
                 raise WeiboError("媒体安装源与已持久化内容证明不一致", kind=WeiboErrorKind.API)
             self._assert_expected_target_path(target_path, entry["expected_target"])
@@ -2171,16 +3169,17 @@ class PersonalArchiveSync:
     def _restore_promotion(
         self,
         root: Path,
+        media_base: Path,
         run_id: str,
         promotion: dict[str, object],
     ) -> None:
         if not _SUPPORTS_DIRECTORY_FDS:
-            self._restore_promotion_checked_paths(root, run_id, promotion)
+            self._restore_promotion_checked_paths(root, media_base, run_id, promotion)
             return
         for entry in reversed(self._promotion_entries(promotion, run_id)):
             staged_path = root / entry["staged"]
             backup_path = root / entry["backup"]
-            with self._open_media_parent(root, entry["target"]) as (
+            with self._open_media_parent(media_base, entry["target"]) as (
                 parent_fd,
                 target_name,
             ):
@@ -2256,13 +3255,14 @@ class PersonalArchiveSync:
     def _restore_promotion_checked_paths(
         self,
         root: Path,
+        media_base: Path,
         run_id: str,
         promotion: dict[str, object],
     ) -> None:
         for entry in reversed(self._promotion_entries(promotion, run_id)):
             staged_path = root / entry["staged"]
             backup_path = root / entry["backup"]
-            target_path = self._checked_media_target_path(root, entry["target"])
+            target_path = self._checked_media_target_path(media_base, entry["target"])
             try:
                 backup_marker = backup_path.lstat()
             except FileNotFoundError:
@@ -2474,7 +3474,9 @@ class PersonalArchiveSync:
         if phase == "db_committed":
             self._discard_promotion_work(repository._root, run_id, promotion)
         elif phase in {"prepared", "promoted"}:
-            self._restore_promotion(repository._root, run_id, promotion)
+            self._restore_promotion(
+                repository._root, repository.paths.assets_dir, run_id, promotion
+            )
         else:
             raise WeiboError("媒体提升恢复阶段无效", kind=WeiboErrorKind.PARSE)
         cleared = dict(checkpoint)
@@ -2645,7 +3647,7 @@ class PersonalArchiveSync:
     @staticmethod
     def _validate_media_target(value: str) -> None:
         if media_path_shape(value) is None:
-            raise WeiboError("媒体目标必须是 media/ 下的 POSIX 相对路径", kind=WeiboErrorKind.API)
+            raise WeiboError("媒体目标必须是归档媒体目录下有效的 POSIX 相对路径", kind=WeiboErrorKind.API)
 
     def _checked_media_target_path(self, root: Path, relative_path: str) -> Path:
         self._validate_media_target(relative_path)

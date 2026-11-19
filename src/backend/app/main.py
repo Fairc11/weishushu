@@ -15,6 +15,7 @@ from backend.app.config import settings
 from backend.app.deps import lifespan_context
 from backend.app.services import log_handler
 from backend.app.version import VERSION
+from weibo_book.archive.render_snapshot import BOOK_FORMAT_VERSION
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,10 +62,13 @@ def create_app() -> FastAPI:
     from backend.app.routers.router_first_run import router as first_run_router  # v1.2.0 V120-1
     from backend.app.routers.router_browser import router as browser_router  # v1.2.0 V120-3
     from backend.app.routers.router_search import router as search_router  # v2.0.1 备份他人微博
+    from backend.app.routers.router_update import router as update_router  # v2.1.0 检查更新
+    from backend.app.routers.router_maintenance import router as maintenance_router  # v2.1.0 设置维护
 
     for r in (profile_router, scraper_router, login_router, download_router,
               tasks_router, logs_router, assets_router, favorites_router, backup_router,
-              history_router, first_run_router, browser_router, search_router):
+              history_router, first_run_router, browser_router, search_router,
+              update_router, maintenance_router):
         app.include_router(r)
 
     @app.get("/healthz", include_in_schema=False)
@@ -80,6 +84,7 @@ def create_app() -> FastAPI:
                 "app_name": settings.app_name,
                 "version": VERSION,
                 "platform": sys.platform,
+                "book_format_version": BOOK_FORMAT_VERSION,
             },
         )
 

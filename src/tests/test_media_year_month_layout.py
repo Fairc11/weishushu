@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -52,12 +53,28 @@ def _write_media(root: Path, relative: str, payload: bytes) -> None:
 
 
 def _make_legacy_archive(root: Path) -> ArchiveRepository:
-    """创建档案后移除布局版本键，模拟旧版平铺布局档案。"""
+    """创建档案后回退到根布局 v1（清单在根目录、data/ 平铺）并移除媒体布局版本键。"""
     repository = ArchiveRepository.create(root, "10001", "本人")
-    repository._connection.execute(
+    repository.close()
+    assets = root / "数据与媒体"
+    data = assets / "数据"
+    legacy_data = root / "data"
+    legacy_data.mkdir()
+    for entry in sorted(data.iterdir(), key=lambda item: item.name):
+        if entry.name == "manifest.json":
+            continue
+        os.replace(entry, legacy_data / entry.name)
+    os.replace(data / "manifest.json", root / "manifest.json")
+    media = assets / "媒体"
+    if media.exists():
+        os.replace(media, root / "media")
+    data.rmdir()
+    assets.rmdir()
+    reopened = ArchiveRepository.open(root, "10001")
+    reopened._connection.execute(
         "DELETE FROM archive_meta WHERE key = ?", (MEDIA_LAYOUT_VERSION_KEY,)
     )
-    return repository
+    return reopened
 
 
 class _FakeDownloader:
@@ -160,8 +177,8 @@ def test_stager_places_post_media_under_owner_year_month(tmp_path):
     staged = _stage(post, [], tmp_path / "work")
 
     paths = {item.record.local_path for item in staged}
-    assert any(path.startswith("media/posts/2026/07/A_image_0_") for path in paths)
-    assert post.media[0].local_path.startswith("media/posts/2026/07/A_image_0_")
+    assert any(path.startswith("媒体/微博图片/2026/07/A_image_0_") for path in paths)
+    assert post.media[0].local_path.startswith("媒体/微博图片/2026/07/A_image_0_")
     assert all(item.staged_path.is_file() for item in staged)
 
 
@@ -179,8 +196,8 @@ def test_stager_places_retweeted_media_under_original_post_month(tmp_path):
     staged = _stage(post, [], tmp_path / "work")
 
     paths = {item.record.local_path for item in staged}
-    assert any(path.startswith("media/posts/2026/07/A_image_0_") for path in paths)
-    assert any(path.startswith("media/posts/2020/01/R_image_0_") for path in paths)
+    assert any(path.startswith("媒体/微博图片/2026/07/A_image_0_") for path in paths)
+    assert any(path.startswith("媒体/微博图片/2020/01/R_image_0_") for path in paths)
 
 
 def test_stager_relocates_comment_images_to_post_month(tmp_path):
@@ -196,7 +213,7 @@ def test_stager_relocates_comment_images_to_post_month(tmp_path):
 
     staged = _stage(post, [comment], work_root)
 
-    assert comment.local_image == "media/comments/2026/07/A_c1.jpg"
+    assert comment.local_image == "媒体/评论图片/2026/07/A_c1.jpg"
     assert (work_root / "media" / "comments" / "2026" / "07" / "A_c1.jpg").is_file()
     assert not (work_root / "media" / "comments" / "A_c1.jpg").exists()
     assert {
@@ -214,7 +231,7 @@ def test_stager_relocates_comment_images_to_post_month(tmp_path):
         image_url="https://example.test/c1.jpg",
     )
     staged2 = _stage(post2, [comment2], work_root)
-    assert comment2.local_image == "media/comments/2026/07/A_c1.jpg"
+    assert comment2.local_image == "媒体/评论图片/2026/07/A_c1.jpg"
     assert len(list((work_root / "media" / "comments" / "2026" / "07").iterdir())) == 1
     assert staged2[0].record.sha256 == staged[0].record.sha256
 
@@ -227,7 +244,7 @@ def test_stager_keeps_avatars_flat(tmp_path):
     )
     staged = _stage(post, [], tmp_path / "work")
 
-    assert [item.record.local_path for item in staged] == ["media/avatars/user-10001.png"]
+    assert [item.record.local_path for item in staged] == ["媒体/头像/user-10001.png"]
 
 
 def test_stager_rejects_media_without_created_at(tmp_path):
@@ -279,21 +296,23 @@ def test_cleanup_recurses_year_month_directories(tmp_path):
 
     root = tmp_path / "archive"
     repository = ArchiveRepository.create(root, "10001", "本人")
-    kept = "media/posts/2026/07/kept.jpg"
+    kept = "媒体/微博图片/2026/07/kept.jpg"
     repository.upsert_media(MediaRecord("post", "A", "image", 0, "remote", kept, "0" * 64))
-    _write_media(root, kept, b"kept")
-    _write_media(root, "media/posts/2026/07/orphan.jpg", b"orphan")
-    _write_media(root, "media/comments/2020/01/orphan.png", b"orphan")
-    _write_media(root, "media/avatars/orphan.png", b"orphan")
+    _write_media(repository.paths.assets_dir, kept, b"kept")
+    _write_media(repository.paths.assets_dir, "媒体/微博图片/2026/07/orphan.jpg", b"orphan")
+    _write_media(repository.paths.assets_dir, "媒体/评论图片/2020/01/orphan.png", b"orphan")
+    _write_media(repository.paths.assets_dir, "媒体/头像/orphan.png", b"orphan")
 
-    removed = cleanup_unreferenced_media(root, repository.list_media_for_render())
+    removed = cleanup_unreferenced_media(
+        repository.paths, repository.list_media_for_render()
+    )
 
     assert removed == [
-        "media/avatars/orphan.png",
-        "media/comments/2020/01/orphan.png",
-        "media/posts/2026/07/orphan.jpg",
+        "媒体/头像/orphan.png",
+        "媒体/微博图片/2026/07/orphan.jpg",
+        "媒体/评论图片/2020/01/orphan.png",
     ]
-    assert root.joinpath(*kept.split("/")).is_file()
+    assert repository.paths.assets_dir.joinpath(*kept.split("/")).is_file()
 
 
 def test_cleanup_rejects_symlinked_month_directory(tmp_path):
@@ -304,12 +323,14 @@ def test_cleanup_rejects_symlinked_month_directory(tmp_path):
     external = tmp_path / "external"
     external.mkdir()
     (external / "keep.jpg").write_bytes(b"keep")
+    from weibo_book.archive.paths import ArchivePaths
+
     month_dir = root / "media" / "posts" / "2026"
     month_dir.mkdir(parents=True)
     (month_dir / "07").symlink_to(external, target_is_directory=True)
 
     with pytest.raises(ArchiveError, match="受管理媒体目录不能是符号链接"):
-        cleanup_unreferenced_media(root, [])
+        cleanup_unreferenced_media(ArchivePaths(root, 1), [])
 
     assert (external / "keep.jpg").read_bytes() == b"keep"
 
@@ -376,7 +397,7 @@ def test_open_migrates_flat_media_to_year_month(tmp_path):
     assert not (root / "media/posts/A_image_0_aa.jpg").exists()
     assert not (root / "media/comments/A_c1.jpg").exists()
     assert _sha256((root / "media/avatars/user-10001.png").read_bytes()) == _sha256(avatar_payload)
-    assert read_media_layout_version(reopened._connection) == MEDIA_LAYOUT_VERSION
+    assert read_media_layout_version(reopened._connection) == 3  # 根布局 v1 封顶
     reopened.close()
 
 
@@ -394,7 +415,7 @@ def test_migration_tolerates_missing_source_files(tmp_path):
     assert [item.local_path for item in reopened.list_media_for_render()] == [
         "media/posts/2026/07/A_image_0_aa.jpg"
     ]
-    assert read_media_layout_version(reopened._connection) == MEDIA_LAYOUT_VERSION
+    assert read_media_layout_version(reopened._connection) == 3  # 根布局 v1 封顶
     reopened.close()
 
 
@@ -434,7 +455,7 @@ def test_migration_resumes_from_partial_state(tmp_path):
     }
     assert (migrated_dir / "A_image_0_aa.jpg").read_bytes() == payload_a
     assert (root / "media" / "posts" / "2025" / "03" / "B_image_0_bb.jpg").read_bytes() == payload_b
-    assert read_media_layout_version(reopened._connection) == MEDIA_LAYOUT_VERSION
+    assert read_media_layout_version(reopened._connection) == 3  # 根布局 v1 封顶
     reopened.close()
 
 
@@ -564,14 +585,14 @@ def test_migration_rewrites_embedded_json_paths(tmp_path):
     assert json.loads(comment_payload)["image"] == (
         "media/comments/2026/07/A_c1.jpg"
     )
-    assert read_media_layout_version(reopened._connection) == MEDIA_LAYOUT_VERSION
+    assert read_media_layout_version(reopened._connection) == 3  # 根布局 v1 封顶
     reopened.close()
 
 
 def test_v2_archive_rewrites_embedded_json_without_moving_files(tmp_path):
     """已是年-月布局（v2）的档案：文件不动，只改写内嵌 JSON 的旧路径。"""
     root = tmp_path / "archive"
-    repository = ArchiveRepository.create(root, "10001", "本人")
+    repository = _make_legacy_archive(root)
     write_media_layout_version(repository._connection, 2)
     repository.upsert_post(_post_record(
         "A", "2026-07-14T16:38:01+08:00",
@@ -596,13 +617,13 @@ def test_v2_archive_rewrites_embedded_json_without_moving_files(tmp_path):
     ).fetchone()[0])
     assert retweeted["media"][0]["local_path"] == migrated
     assert (root / "media/posts/2020/01/R_image_0_bb.jpg").read_bytes() == payload
-    assert read_media_layout_version(reopened._connection) == MEDIA_LAYOUT_VERSION
+    assert read_media_layout_version(reopened._connection) == 3  # 根布局 v1 封顶
     reopened.close()
 
 
 def test_embedded_rewrite_keeps_unresolvable_and_conflicting_refs(tmp_path):
     root = tmp_path / "archive"
-    repository = ArchiveRepository.create(root, "10001", "本人")
+    repository = _make_legacy_archive(root)
     write_media_layout_version(repository._connection, 2)
     repository.upsert_post(_post_record(
         "A", "2026-07-14T16:38:01+08:00",
@@ -627,5 +648,5 @@ def test_embedded_rewrite_keeps_unresolvable_and_conflicting_refs(tmp_path):
     assert json.loads(row[0])["local_image"] == "media/posts/Gone_link_card_0_zz.jpg"
     # 文件名冲突（多个年-月路径同名）时不猜测，保留原路径
     assert json.loads(row[1])[0]["local_path"] == "media/posts/dup.jpg"
-    assert read_media_layout_version(reopened._connection) == MEDIA_LAYOUT_VERSION
+    assert read_media_layout_version(reopened._connection) == 3  # 根布局 v1 封顶
     reopened.close()

@@ -175,7 +175,7 @@ def resolve_runtime_context() -> RuntimeContext:
         output_root = executable_root / "output"
         browser_storage_root = state_root / "browser"
         manifest_path = _manifest_path(resource_root, platform, run_mode, executable_root)
-        app_version = "2.0.1"
+        app_version = "2.2.0"
         source_commit = _source_commit()
     else:
         executable_root = Path(sys.executable).parent

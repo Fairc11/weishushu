@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 
 # ====== 通用：format / extract_type / image_quality 枚举 ======
@@ -185,6 +185,37 @@ class ArchiveFolderInspection(BaseModel):
     total_posts: int = 0
     last_successful_sync_at: str = ""
     message: str = ""
+    history_complete: bool = True
+    history_cutoff: str = ""
+    output_formats: dict[str, bool] = Field(
+        default_factory=lambda: {"pdf": False, "markdown": False}
+    )
+    book_format_version: int | None = None
+
+
+class ArchiveLibraryEntry(BaseModel):
+    available: bool = True
+    path: str
+    uid: str = ""
+    screen_name: str = ""
+    total_posts: int = 0
+    last_successful_sync_at: str = ""
+    history_complete: bool = True
+    history_cutoff: str = ""
+    book_format_version: int | None = None
+
+
+class ArchiveLibraryResponse(BaseModel):
+    entries: list[ArchiveLibraryEntry] = Field(default_factory=list)
+
+
+class ArchiveSizeRow(BaseModel):
+    path: str
+    size_bytes: int | None = None
+
+
+class ArchiveSizeResponse(BaseModel):
+    sizes: list[ArchiveSizeRow] = Field(default_factory=list)
 
 
 class ArchiveInspectRequest(BaseModel):
@@ -203,7 +234,7 @@ class PersonalArchiveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     output_dir: str
-    mode: Literal["create", "incremental", "rebuild"]
+    mode: Literal["create", "incremental", "rebuild", "backfill"]
     pacing_mode: Literal[
         "standard",
         "low_2_3_hours",
@@ -212,13 +243,89 @@ class PersonalArchiveRequest(BaseModel):
     ]
     keep_awake_when_plugged: bool = Field(..., strict=True)
     target_uid: str | None = None
+    range_months: int | None = None
+    backfill_months: int | None = None
+    video_upgrade_limit: Literal[0, 10, 50, "all"] = 0
+    include_supertopics: bool = Field(False, strict=True)
+
+    @field_validator("video_upgrade_limit", mode="before")
+    @classmethod
+    def _check_video_upgrade_limit(cls, value):
+        from weibo_book.archive.video_quality import valid_limit
+        if not valid_limit(value):
+            raise ValueError("旧视频更新数量无效")
+        return value
+
+    @model_validator(mode="after")
+    def _check_staged_backup_fields(self) -> "PersonalArchiveRequest":
+        if self.mode != "incremental" and self.video_upgrade_limit != 0:
+            raise ValueError("旧视频更新选择仅适用于新增备份")
+        if self.include_supertopics and (self.mode != "incremental" or not self.target_uid):
+            raise ValueError("超话补漏仅适用于已有的认证博主档案")
+        range_choices = {3, 12, 24, 36, 60, 0}
+        backfill_choices = {3, 12, 24, 0}
+        if self.mode == "create":
+            if (
+                self.range_months is not None
+                and self.range_months not in range_choices
+            ):
+                raise ValueError("备份范围月份无效")
+        elif self.range_months is not None:
+            raise ValueError("备份范围月份仅适用于新建微博书")
+        if self.mode == "backfill":
+            if self.backfill_months is None:
+                raise ValueError("历史回填必须选择回填月份")
+            if self.backfill_months not in backfill_choices:
+                raise ValueError("历史回填月份无效")
+        elif self.backfill_months is not None:
+            raise ValueError("回填月份仅适用于历史回填")
+        return self
 
 
 class PersonalArchiveStartResponse(BaseModel):
     task_id: str
-    mode: Literal["create", "incremental", "rebuild"]
+    mode: Literal["create", "incremental", "rebuild", "backfill"]
     self_uid: str
     self_screen_name: str
+
+
+class ArchiveOutputFormats(BaseModel):
+    """固定文件的保存格式开关；HTML 与离线数据恒为必选。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pdf: bool = False
+    markdown: bool = False
+
+
+class ArchiveSettingsResponse(BaseModel):
+    """微博书目录的分段备份与保存格式设置。"""
+
+    state: str
+    output_formats: ArchiveOutputFormats = Field(
+        default_factory=ArchiveOutputFormats
+    )
+    history_complete: bool = True
+    history_cutoff: str = ""
+
+
+class ArchiveSettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    output_dir: str
+    output_formats: ArchiveOutputFormats
+    target_uid: str | None = None
+
+
+class ArchivePreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    output_dir: str
+    target_uid: str | None = None
+
+
+class ArchivePreviewStartResponse(BaseModel):
+    task_id: str
 
 
 class FollowingArchiveRequest(BaseModel):
@@ -264,7 +371,7 @@ class FollowingDurationCheckResponse(BaseModel):
 class RecoveryTaskSummary(BaseModel):
     task_id: str
     task_kind: Literal["personal_archive", "following_archive"]
-    mode: Literal["create", "incremental", "rebuild", "update"]
+    mode: Literal["create", "incremental", "rebuild", "backfill", "update"]
     state: Literal["waiting_resume", "error"]
     phase: Literal["sync", "render", "bloggers", "supertopics", "duration"]
     progress_current: int
@@ -332,3 +439,25 @@ class SearchResponse(BaseModel):
     hits: list[SearchHit]
     query: str
     files_scanned: int
+
+
+class VideoQualityCheckResponse(BaseModel):
+    task_id: str | None = None
+    summary: dict[str, int] | None = None
+
+
+class VideoQualityCheckRequest(ArchiveInspectRequest):
+    pacing_mode: Literal["standard", "low_2_3_hours", "low_4_6_hours", "low_8_12_hours"] = "standard"
+
+
+class ArchiveLibraryRegistration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    output_dir: str
+    uid: str | None = None
+
+
+class ArchiveLibraryMutation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str
+    uid: str
+    output_dir: str | None = None

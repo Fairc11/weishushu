@@ -18,7 +18,8 @@ export function init(ctx = Ptu) {
       }
     },
 
-    showRiskModal() {
+    showRiskModal(options) {
+      const readonly = Boolean(options && options.readonly);
       const overlay = Ptu.$('risk-modal-overlay');
       const scroller = Ptu.$('risk-scroll');
       const hint = Ptu.$('risk-scroll-hint');
@@ -27,6 +28,17 @@ export function init(ctx = Ptu) {
       if (!overlay || !scroller || !confirmBtn || !cancelBtn) return;
 
       overlay.hidden = false;
+      Ptu.State.riskModalReadonly = readonly;
+      confirmBtn.textContent = readonly ? '关闭' : '确认并继续';
+      cancelBtn.hidden = readonly;
+      // 只读重看不要求滚动到底，「关闭」立即可用
+      if (readonly) {
+        confirmBtn.disabled = false;
+        if (hint) hint.hidden = true;
+      } else {
+        confirmBtn.disabled = true;
+        if (hint) hint.hidden = false;
+      }
 
       // 滚动阅读至底部才可确认；内容无需滚动时（大窗口）直接放行
       const updateConfirmState = () => {
@@ -46,11 +58,17 @@ export function init(ctx = Ptu) {
       global.addEventListener('resize', updateConfirmState);
 
       confirmBtn.addEventListener('click', async () => {
+        if (Ptu.State.riskModalReadonly) {
+          overlay.hidden = true;
+          return;
+        }
         try {
           await Ptu.Api.firstRunAccept();
           Ptu.State.firstRunAccepted = true;
           overlay.hidden = true;
-          Ptu.toast('已接受 v2.0.1 风险须知');
+          Ptu.toast('已接受 v2.2.0 风险须知');
+          // 风险须知确认后再检查更新，避免两个弹窗叠在一起
+          if (typeof Ptu.maybeAutoCheckUpdate === 'function') Ptu.maybeAutoCheckUpdate();
         } catch (e) {
           Ptu.toast('接受失败：' + e.message);
         }
@@ -93,15 +111,25 @@ export function init(ctx = Ptu) {
             Ptu._loginWatchTimer = null;
           }
           if (badge) {
-            badge.textContent = `已登录（${r.cookie_source}）`;
+            const name = await Ptu.fetchLoginName();
+            badge.textContent = name ? `已登录 · ${name}` : '已登录';
+            badge.title = name ? `当前账号：@${name}` : '';
             badge.className = 'badge badge-success';
           }
           // v1.1.5 已登录 → 显示一键备份按钮
           const backupBlock = Ptu.$('backup-self-block');
           if (backupBlock) backupBlock.hidden = false;
+          // v2.1.0 左卡状态与保存格式按已知微博书目录刷新
+          if (Ptu.refreshSelfArchiveStatus) Ptu.refreshSelfArchiveStatus();
+          if (Ptu.refreshHistoryList) Ptu.refreshHistoryList();
         } else {
+          Ptu.State.loginName = '';
+          Ptu.State.loginUid = '';
+          if (Ptu.refreshSelfArchiveStatus) Ptu.refreshSelfArchiveStatus();
+          if (Ptu.refreshHistoryList) Ptu.refreshHistoryList();
           if (badge) {
             badge.textContent = '未登录';
+            badge.title = '';
             badge.className = 'badge badge-muted';
           }
         }
@@ -113,7 +141,21 @@ export function init(ctx = Ptu) {
       }
     },
 
+    async fetchLoginName(force = false) {
+      if (!force && Ptu.State.loginName) return Ptu.State.loginName;
+      try {
+        const w = await Ptu.Api.whoami();
+        Ptu.State.loginName = w.screen_name || '';
+        Ptu.State.loginUid = w.uid ? String(w.uid) : '';
+      } catch (e) {
+        Ptu.State.loginName = '';
+        Ptu.State.loginUid = '';
+      }
+      return Ptu.State.loginName;
+    },
+
     async logout() {
+      if (Ptu.guardActiveTask()) return;
       if (!confirm('退出登录将删除本机保存的微博登录态，下次使用需要重新扫码。继续？')) return;
       Ptu.toggleLoginMenu(false);
       try {
@@ -277,6 +319,7 @@ export function init(ctx = Ptu) {
     },
 
     async loginQrcode() {
+      if (Ptu.guardActiveTask()) return;
       if (
         Ptu.State.qrcodeCreating
         || (Ptu.State.qrcodeSessionId && !Ptu.State.qrcodeTerminal)

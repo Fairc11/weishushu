@@ -1,8 +1,8 @@
 const TIMELINE_WINDOW_SIZE=60;
 const TIMELINE_WINDOW_SHIFT=40;
 const TIMELINE_MONTH_CONTEXT=20;
-const pinnedPosts=archive.posts.filter(post=>post.is_pinned===true);
-const normalPosts=archive.posts.filter(post=>post.is_pinned!==true);
+const pinnedPosts=mainPosts.filter(post=>post.is_pinned===true);
+const normalPosts=mainPosts.filter(post=>post.is_pinned!==true);
 const timelineMonths=Array.isArray(archive.timeline&&archive.timeline.months)?archive.timeline.months:[];
 const newerWindow=document.querySelector('[data-action="newer-window"]');
 const olderWindow=document.querySelector('[data-action="older-window"]');
@@ -25,9 +25,7 @@ function renderTimelineWindow(start,{latest=false,targetKey=null,focusIndex=null
     }
     fragment.append(article);
   });
-  feed.querySelectorAll("[data-live-photo] video").forEach(video=>{
-    video.pause();
-  });
+  pauseAllVideos();
   feed.replaceChildren(fragment);
   state.timelineStart=boundedStart;
   state.timelineEnd=end;
@@ -55,9 +53,10 @@ function moveTimelineWindow(direction){
   });
 }
 
-function showLatestTimeline(){
+function showLatestTimeline({scroll=true}={}){
   renderTimelineWindow(0,{latest:true});
   if(timelineMonths.length)setTimelineSelection(timelineMonths[0].key);
+  if(!scroll)return;
   timelineProgrammaticScroll=true;
   window.scrollTo(0,feedView.offsetTop);
   requestAnimationFrame(()=>{

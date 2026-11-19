@@ -11,7 +11,7 @@
 ;     默认 fallback 2.0.0（与 backend/app/version.py VERSION 保持一致）
 
 #ifndef MyAppVersion
-  #define MyAppVersion "2.0.1"
+  #define MyAppVersion "2.2.0"
 #endif
 
 #define MyAppName "微书薯"

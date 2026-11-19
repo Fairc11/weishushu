@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="light" data-platform="{{ platform }}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,18 +10,22 @@
   <link rel="stylesheet" href="/static/css/components.css?v={{ version }}">
   <link rel="stylesheet" href="/static/css/workflows.css?v={{ version }}">
   <link rel="stylesheet" href="/static/css/responsive.css?v={{ version }}">
+  <link rel="stylesheet" href="/static/css/liquid.css?v={{ version }}">
   {% if platform == 'win32' %}
   <link rel="stylesheet" href="/static/css/app-win.css?v={{ version }}">
   {% endif %}
 </head>
-<body>
-  <header class="app-header" id="app-header">
-    <div class="brand">
-      <span class="logo-dot"></span>
-      <span class="brand-name">{{ app_name }}</span>
-      <span class="brand-version">v{{ version }}</span>
-    </div>
-    <div class="header-actions workflow-toolbar">
+<body data-book-format="{{ book_format_version }}">
+  <aside class="app-sidebar" id="app-sidebar" aria-label="侧边栏">
+    <header class="app-header" id="app-header">
+      <div class="brand">
+        <span class="logo-dot"></span>
+        <span class="brand-name">{{ app_name }}</span>
+        <span class="brand-version">v{{ version }}</span>
+      </div>
+    </header>
+    {% block sidebar_nav %}{% endblock %}
+    <div class="sidebar-footer header-actions workflow-toolbar">
       <div class="login-menu-wrap">
         <button id="login-menu-toggle" class="login-status-control" type="button"
                 aria-expanded="false" aria-controls="login-menu" title="登录状态">
@@ -29,23 +33,19 @@
         </button>
         <div id="login-menu" class="login-menu" hidden>
           <button class="btn btn-primary" id="btn-qrcode" type="button">扫码登录</button>
-          <button class="btn btn-secondary" id="btn-chrome" type="button">Chrome 导入（开发中）</button>
           <button class="btn btn-secondary" id="btn-logout" type="button" hidden>退出登录</button>
         </div>
       </div>
-      <button id="history-toggle" class="icon-btn" type="button"
-              aria-label="历史记录" title="历史记录">
-        📚
-      </button>
-      <button id="btn-browser" class="icon-btn" aria-label="浏览器" title="浏览器（开发中）">
-        🌐
+      <button id="settings-toggle" class="icon-btn" type="button"
+              aria-label="设置" title="设置">
+        ⚙<span id="settings-update-dot" class="settings-dot" hidden></span>
       </button>
       <button id="theme-toggle" class="icon-btn" aria-label="切换主题" title="切换主题">
         <span class="icon-light">☀</span>
         <span class="icon-dark">☾</span>
       </button>
     </div>
-  </header>
+  </aside>
 
   <main class="app-main app-split-view browser-console-hidden" id="app-main">
     <section class="main-area" id="main-area">
@@ -84,10 +84,57 @@
     </section>
   </div>
 
+  <!-- v2.2.0：发现新版本弹窗（能联网取到发布信息时才出现） -->
+  <div class="risk-modal-overlay" id="update-overlay" hidden>
+    <div class="risk-modal update-modal" role="dialog" aria-modal="true" aria-labelledby="update-modal-title">
+      <h2 id="update-modal-title">发现新版本</h2>
+      <p class="hint" id="update-modal-version"></p>
+      <div class="update-notes" id="update-modal-notes" tabindex="0"></div>
+      <div class="risk-actions">
+        <button class="btn btn-secondary" id="update-modal-skip" type="button">跳过此版本</button>
+        <button class="btn btn-secondary" id="update-modal-later" type="button">稍后</button>
+        <button class="btn btn-primary" id="update-modal-install" type="button" hidden>下载并更新</button>
+        <button class="btn btn-primary" id="update-modal-open" type="button" hidden>前往发布页下载</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- v2.1.0：设置面板 -->
+  <div class="risk-modal-overlay" id="settings-overlay" hidden>
+    <div class="risk-modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <h2 id="settings-title">设置</h2>
+      <div class="risk-scroll settings-scroll">
+        <h3>检查更新</h3>
+        <p class="settings-line">当前版本 <strong id="settings-version"></strong></p>
+        <p class="hint" id="update-status">手动检查是否有新版本。</p>
+        <div class="update-notes" id="update-notes" tabindex="0" hidden></div>
+        <div class="risk-actions settings-actions">
+          <button class="btn btn-secondary" id="btn-check-update" type="button">检查更新</button>
+          <button class="btn btn-primary" id="btn-install-update" type="button" hidden>下载并更新</button>
+        </div>
+        <h3>备份与通知</h3>
+        <label class="settings-switch"><input type="checkbox" id="settings-auto-update-check"> 启动时自动检查更新（发现新版本时弹窗显示更新说明）</label>
+        <label class="settings-switch"><input type="checkbox" id="settings-notify-task"> 备份完成或失败时发送系统通知</label>
+        <h3>缓存</h3>
+        <div id="settings-cache-list" class="settings-list"><p class="hint">正在统计缓存…</p></div>
+        <h3>档案存储</h3>
+        <div id="settings-storage-list" class="settings-list"><p class="hint">正在统计档案占用…</p></div>
+        <h3>其他</h3>
+        <div class="risk-actions settings-actions">
+          <button class="btn btn-secondary" id="btn-open-data-dir" type="button">打开应用数据目录</button>
+          <button class="btn btn-secondary" id="btn-reread-risk" type="button">重新阅读风险须知</button>
+        </div>
+      </div>
+      <div class="risk-actions">
+        <button class="btn btn-primary" id="settings-close-btn" type="button">完成</button>
+      </div>
+    </div>
+  </div>
+
   <!-- v2.0.0：首启风险须知模态（强模态 + 滚动到底才可确认） -->
   <div class="risk-modal-overlay" id="risk-modal-overlay" hidden>
     <div class="risk-modal" role="dialog" aria-modal="true" aria-labelledby="risk-modal-title">
-      <h2 id="risk-modal-title">微书薯 v2.0.1 风险须知</h2>
+      <h2 id="risk-modal-title">微书薯 v2.2.0 风险须知</h2>
       <div class="risk-scroll" id="risk-scroll" tabindex="0" aria-describedby="risk-scroll-hint">
         <h3>用途与边界</h3>
         <p>微书薯是只读工具，仅用于在单一设备上备份<strong>本人账号当前可见</strong>的微博数据，产出互动 HTML、PDF、Markdown 和本地媒体档案。它不发布、不修改、不删除任何微博内容。</p>
@@ -127,6 +174,7 @@
   <script type="module" src="/static/js/modules/login.js?v={{ version }}"></script>
   <script type="module" src="/static/js/modules/archive.js?v={{ version }}"></script>
   <script type="module" src="/static/js/modules/tasks.js?v={{ version }}"></script>
+  <script type="module" src="/static/js/modules/settings.js?v={{ version }}"></script>
   <script type="module" src="/static/js/modules/desktop.js?v={{ version }}"></script>
   {% if platform == 'win32' %}
   <script src="/static/js/app-win.js?v={{ version }}"></script>

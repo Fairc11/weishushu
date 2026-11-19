@@ -1329,8 +1329,8 @@ async def test_abandon_failure_before_sync_keeps_verified_formal_directory(tmp_p
     if mode == "create":
         assert list(root.iterdir()) == []
     else:
-        assert (root / "manifest.json").is_file()
-        assert (root / "data" / "archive.db").is_file()
+        assert (root / "数据与媒体" / "数据" / "manifest.json").is_file()
+        assert (root / "数据与媒体" / "数据" / "archive.db").is_file()
     assert store.load() is None
     assert manager.recovery_summary() is None
 
@@ -1382,9 +1382,9 @@ async def test_abandon_replacement_removes_only_exact_task_archive(tmp_path, mod
         for name in ("微博书.html", "微博书.pdf", "微博书.md"):
             (root / name).write_bytes(f"旧-{name}".encode())
             preserved[name] = (root / name).read_bytes()
-        data = root / "data" / "archive-data.js"
+        data = root / "数据与媒体" / "数据" / "archive-data.js"
         data.write_bytes(b"old-data")
-        preserved["data/archive-data.js"] = data.read_bytes()
+        preserved["数据与媒体/数据/archive-data.js"] = data.read_bytes()
 
     store = PersistentTaskStore(tmp_path / "task.json")
     manager = TaskManager(store)

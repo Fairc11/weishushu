@@ -6,6 +6,7 @@
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -36,13 +37,22 @@ INDEX_HTML = ROOT / "backend" / "app" / "templates" / "index.html"
 
 
 def run_node(source: str) -> None:
-    result = subprocess.run(
-        ["node", "-e", source],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    # Windows CreateProcess 命令行上限 32767 字符，长脚本必须落盘执行
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".js", encoding="utf-8", delete=False
+    ) as handle:
+        handle.write(source)
+        script_path = handle.name
+    try:
+        result = subprocess.run(
+            ["node", script_path],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    finally:
+        Path(script_path).unlink(missing_ok=True)
     if result.returncode:
         raise AssertionError(f"Node 契约失败:\n{result.stdout}\n{result.stderr}")
 

@@ -57,6 +57,10 @@
     display: none;
   }
 
+  .entry-grid {
+    grid-template-columns: 1fr;
+  }
+
   .workflow-toolbar {
     gap: var(--wb-space-1);
   }

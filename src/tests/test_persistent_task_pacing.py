@@ -347,6 +347,8 @@ def test_personal_archive_service_passes_required_pacing_fields_to_manager(tmp_p
         pacing_mode="low_4_6_hours",
         keep_awake_when_plugged=True,
         target_label=None,
+        video_upgrade_limit=0,
+        include_supertopics=False,
     )
 
 

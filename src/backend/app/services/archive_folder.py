@@ -15,6 +15,7 @@ from pathlib import Path
 
 from backend.app.schemas import ArchiveFolderInspection
 from backend.app.services.backup_index import INDEX_FILENAME
+from weibo_book.archive.paths import ASSETS_DIR_NAME, DATA_DIR_NAME
 from weibo_book.archive.schema import (
     DATABASE_NAME,
     MANIFEST_NAME,
@@ -22,6 +23,7 @@ from weibo_book.archive.schema import (
     read_schema_version,
     validate_schema,
     validate_schema_v1,
+    validate_schema_v2,
 )
 from weibo_book.errors import WeiboError, WeiboErrorKind
 
@@ -85,6 +87,10 @@ def _result(
     total_posts: int = 0,
     last_successful_sync_at: str = "",
     message: str = "",
+    history_complete: bool = True,
+    history_cutoff: str = "",
+    output_formats: dict[str, bool] | None = None,
+    book_format_version: int | None = None,
 ) -> ArchiveFolderInspection:
     return ArchiveFolderInspection(
         state=state,
@@ -94,6 +100,14 @@ def _result(
         total_posts=total_posts,
         last_successful_sync_at=last_successful_sync_at,
         message=message,
+        history_complete=history_complete,
+        history_cutoff=history_cutoff,
+        output_formats=(
+            dict(output_formats)
+            if output_formats is not None
+            else {"pdf": True, "markdown": True}
+        ),
+        book_format_version=book_format_version,
     )
 
 
@@ -271,6 +285,9 @@ def _path_snapshot_unchanged(
     data_identity: tuple[int, int, int, int],
     wal_path: Path,
     wal_was_absent: bool,
+    *,
+    assets_path: Path | None = None,
+    assets_identity: tuple[int, int, int, int] | None = None,
 ) -> bool:
     root_marker = _lstat_path(selected)
     data_marker = _lstat_path(data_path)
@@ -283,6 +300,14 @@ def _path_snapshot_unchanged(
         or _identity(data_marker) != data_identity
     ):
         return False
+    if assets_path is not None and assets_identity is not None:
+        assets_marker = _lstat_path(assets_path)
+        if (
+            assets_marker is None
+            or stat.S_ISLNK(assets_marker.st_mode)
+            or _identity(assets_marker) != assets_identity
+        ):
+            return False
     if not all(_path_source_is_unchanged(source) for source in sources):
         return False
     return not wal_was_absent or _lstat_path(wal_path) is None
@@ -297,11 +322,28 @@ def _snapshot_source_unchanged(
     *,
     selected: Path | None = None,
     root_identity: tuple[int, int, int, int] | None = None,
+    data_parent_fd: int | None = None,
+    data_name: str = "data",
+    assets_fd: int | None = None,
+    assets_identity: tuple[int, int, int, int] | None = None,
 ) -> bool:
     if not all(_source_is_unchanged(source) for source in sources):
         return False
+    if assets_fd is not None and assets_identity is not None:
+        try:
+            assets_path_stat = _lstat_at(root_fd, ASSETS_DIR_NAME)
+            if (
+                _identity(os.fstat(assets_fd)) != assets_identity
+                or assets_path_stat is None
+                or stat.S_ISLNK(assets_path_stat.st_mode)
+                or _identity(assets_path_stat) != assets_identity
+            ):
+                return False
+        except OSError:
+            return False
     try:
-        data_path_stat = _lstat_at(root_fd, "data")
+        parent_fd = data_parent_fd if data_parent_fd is not None else root_fd
+        data_path_stat = _lstat_at(parent_fd, data_name)
         if (
             _identity(os.fstat(data_fd)) != data_identity
             or data_path_stat is None
@@ -333,13 +375,13 @@ def _close_sources(sources: tuple[_OpenedSource, ...]) -> None:
 
 
 def _copy_snapshot_once(
-    root_fd: int,
+    manifest_fd: int,
     data_fd: int,
     temporary_root: Path,
 ) -> tuple[bytes, Path, tuple[_OpenedSource, ...], bool]:
     opened: list[_OpenedSource] = []
     try:
-        manifest = _open_regular_at(root_fd, MANIFEST_NAME)
+        manifest = _open_regular_at(manifest_fd, MANIFEST_NAME)
         opened.append(manifest)
         database = _open_regular_at(data_fd, DATABASE_NAME)
         opened.append(database)
@@ -373,7 +415,7 @@ def _read_manifest(payload_bytes: bytes) -> dict:
             valid = isinstance(value, expected_type)
         if not valid:
             raise ValueError(f"归档清单字段 {field} 类型错误")
-    if payload["schema_version"] not in {1, SCHEMA_VERSION}:
+    if payload["schema_version"] not in {1, 2, SCHEMA_VERSION}:
         raise ValueError("归档清单版本不受支持")
     return payload
 
@@ -399,6 +441,8 @@ def _validate_database(database_path: Path) -> tuple[sqlite3.Connection, int]:
         schema_version = read_schema_version(connection)
         if schema_version == 1:
             validate_schema_v1(connection)
+        elif schema_version == 2:
+            validate_schema_v2(connection)
         elif schema_version == SCHEMA_VERSION:
             validate_schema(connection)
         else:
@@ -408,6 +452,84 @@ def _validate_database(database_path: Path) -> tuple[sqlite3.Connection, int]:
     except BaseException:
         connection.close()
         raise
+
+
+def _read_archive_meta_state(
+    connection: sqlite3.Connection,
+) -> dict[str, object]:
+    """在只读快照连接上读取分段备份与保存格式元数据，坏值回退默认。"""
+    state: dict[str, object] = {
+        "history_complete": True,
+        "history_cutoff": "",
+        "output_formats": {"pdf": False, "markdown": False},
+        "book_format_version": None,
+    }
+    try:
+        rows = connection.execute(
+            "SELECT key, value_json FROM archive_meta "
+            "WHERE key IN ('history_complete', 'history_cutoff', 'output_formats',"
+            " 'book_format_version')"
+        ).fetchall()
+    except sqlite3.Error:
+        return state
+    values: dict[str, object] = {}
+    for key, raw in rows:
+        try:
+            values[key] = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            continue
+    complete = values.get("history_complete")
+    if type(complete) is bool:
+        state["history_complete"] = complete
+    cutoff = values.get("history_cutoff")
+    if isinstance(cutoff, str):
+        state["history_cutoff"] = cutoff
+    formats = values.get("output_formats")
+    if isinstance(formats, dict):
+        merged = {"pdf": True, "markdown": True}
+        for name in merged:
+            value = formats.get(name)
+            if type(value) is bool:
+                merged[name] = value
+        state["output_formats"] = merged
+    version = values.get("book_format_version")
+    if type(version) is int and version > 0:
+        state["book_format_version"] = version
+    return state
+
+
+_FORMAT_META_RE = re.compile(
+    r'<meta\s+name="weishushu-book-format"\s+content="(\d+)"'
+)
+_FORMAT_V3_MARKER = 'data-view="search"'
+_FORMAT_HTML_NAME = "微博书.html"
+_FORMAT_FINGERPRINT_LIMIT = 1024 * 1024
+
+
+def _detect_book_format(selected: Path, stamped: object) -> int | None:
+    """识别互动 HTML 版式号：优先数据库标记，缺省时按页面特征指纹推断。
+
+    V3 起渲染会写入数据库标记与 meta 标签；此前渲染的档案没有标记，
+    含搜索视图的为当前开发版（V3），其余互动 HTML 为已发布的 V2。
+    读取失败或没有页面时返回 None（未知）。
+    """
+    if type(stamped) is int and stamped > 0:
+        return stamped
+    path = selected / _FORMAT_HTML_NAME
+    try:
+        file_stat = path.lstat()
+        if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(file_stat.st_mode):
+            return None
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            content = handle.read(_FORMAT_FINGERPRINT_LIMIT)
+    except OSError:
+        return None
+    tagged = _FORMAT_META_RE.search(content[:65536])
+    if tagged:
+        return int(tagged.group(1))
+    if _FORMAT_V3_MARKER in content:
+        return 3
+    return 2
 
 
 def _damaged_for_marker_error(
@@ -461,6 +583,7 @@ def _inspect_archive_attempt(
 
     root_fd: int | None = None
     data_fd: int | None = None
+    assets_fd: int | None = None
     sources: tuple[_OpenedSource, ...] = ()
     try:
         try:
@@ -476,9 +599,25 @@ def _inspect_archive_attempt(
                 raise _SnapshotChanged("归档根目录已变化")
             return _result("empty", selected)
 
-        manifest_stat = _lstat_at(root_fd, MANIFEST_NAME)
-        data_stat = _lstat_at(root_fd, "data")
-        if manifest_stat is None and data_stat is None:
+        assets_identity: tuple[int, int, int, int] | None = None
+        data_parent_fd = root_fd
+        data_name = "data"
+        manifest_stat = None
+        assets_stat = _lstat_at(root_fd, ASSETS_DIR_NAME)
+        if assets_stat is not None:
+            if stat.S_ISLNK(assets_stat.st_mode):
+                raise _ArchiveSymlinkError(ASSETS_DIR_NAME)
+            if not stat.S_ISDIR(assets_stat.st_mode):
+                raise _ArchiveMarkerTypeError(ASSETS_DIR_NAME)
+            assets_fd = _require_directory_at(root_fd, ASSETS_DIR_NAME)
+            assets_identity = _identity(os.fstat(assets_fd))
+            data_parent_fd = assets_fd
+            data_name = DATA_DIR_NAME
+            data_stat = _lstat_at(assets_fd, DATA_DIR_NAME)
+        else:
+            manifest_stat = _lstat_at(root_fd, MANIFEST_NAME)
+            data_stat = _lstat_at(root_fd, "data")
+        if assets_stat is None and manifest_stat is None and data_stat is None:
             legacy_stat = _lstat_at(root_fd, INDEX_FILENAME)
             if legacy_stat is not None:
                 if stat.S_ISLNK(legacy_stat.st_mode):
@@ -507,10 +646,10 @@ def _inspect_archive_attempt(
                 raise _ArchiveMarkerTypeError(MANIFEST_NAME)
         if data_stat is not None:
             if stat.S_ISLNK(data_stat.st_mode):
-                raise _ArchiveSymlinkError("data")
+                raise _ArchiveSymlinkError(data_name)
             if not stat.S_ISDIR(data_stat.st_mode):
-                raise _ArchiveMarkerTypeError("data")
-        if manifest_stat is None or data_stat is None:
+                raise _ArchiveMarkerTypeError(data_name)
+        if data_stat is None or (assets_stat is None and manifest_stat is None):
             if not _root_is_unchanged(selected, root_fd, root_identity):
                 raise _SnapshotChanged("归档根目录已变化")
             return _result(
@@ -519,8 +658,32 @@ def _inspect_archive_attempt(
                 message="归档清单与归档数据库不完整",
             )
 
-        data_fd = _require_directory_at(root_fd, "data")
+        data_fd = _require_directory_at(data_parent_fd, data_name)
         data_identity = _identity(os.fstat(data_fd))
+        if assets_fd is not None:
+            manifest_stat = _lstat_at(data_fd, MANIFEST_NAME)
+            if manifest_stat is None:
+                if not _snapshot_source_unchanged(
+                    (),
+                    root_fd,
+                    data_fd,
+                    data_identity,
+                    wal_was_absent=_lstat_at(data_fd, f"{DATABASE_NAME}-wal") is None,
+                    selected=selected,
+                    root_identity=root_identity,
+                    data_parent_fd=assets_fd,
+                    data_name=data_name,
+                    assets_fd=assets_fd,
+                    assets_identity=assets_identity,
+                ):
+                    raise _SnapshotChanged("归档数据目录已变化")
+                return _result(
+                    "damaged", selected, message="归档清单与归档数据库不完整"
+                )
+            if stat.S_ISLNK(manifest_stat.st_mode):
+                raise _ArchiveSymlinkError(MANIFEST_NAME)
+            if not stat.S_ISREG(manifest_stat.st_mode):
+                raise _ArchiveMarkerTypeError(MANIFEST_NAME)
         database_stat = _lstat_at(data_fd, DATABASE_NAME)
         if database_stat is None:
             if not _snapshot_source_unchanged(
@@ -531,6 +694,10 @@ def _inspect_archive_attempt(
                 wal_was_absent=_lstat_at(data_fd, f"{DATABASE_NAME}-wal") is None,
                 selected=selected,
                 root_identity=root_identity,
+                data_parent_fd=data_parent_fd,
+                data_name=data_name,
+                assets_fd=assets_fd,
+                assets_identity=assets_identity,
             ):
                 raise _SnapshotChanged("归档数据目录已变化")
             return _result(
@@ -543,12 +710,22 @@ def _inspect_archive_attempt(
 
         with tempfile.TemporaryDirectory(prefix="weishushu-inspect-") as temporary:
             manifest_bytes, snapshot_database, sources, wal_was_absent = (
-                _copy_snapshot_once(root_fd, data_fd, Path(temporary))
+                _copy_snapshot_once(
+                    data_fd if assets_fd is not None else root_fd,
+                    data_fd,
+                    Path(temporary),
+                )
             )
 
             pending_result: ArchiveFolderInspection | None = None
             manifest: dict | None = None
             total_posts = 0
+            meta_state: dict[str, object] = {
+                "history_complete": True,
+                "history_cutoff": "",
+                "output_formats": {"pdf": False, "markdown": False},
+                "book_format_version": None,
+            }
             try:
                 manifest = _read_manifest(manifest_bytes)
             except (UnicodeError, json.JSONDecodeError, TypeError, ValueError):
@@ -560,6 +737,7 @@ def _inspect_archive_attempt(
                 connection: sqlite3.Connection | None = None
                 try:
                     connection, total_posts = _validate_database(snapshot_database)
+                    meta_state = _read_archive_meta_state(connection)
                 except _IntegrityCheckFailed:
                     pending_result = _result(
                         "damaged",
@@ -582,6 +760,10 @@ def _inspect_archive_attempt(
                 wal_was_absent,
                 selected=selected,
                 root_identity=root_identity,
+                data_parent_fd=data_parent_fd,
+                data_name=data_name,
+                assets_fd=assets_fd,
+                assets_identity=assets_identity,
             ):
                 raise _SnapshotChanged("归档文件已变化")
             if pending_result is not None:
@@ -593,6 +775,12 @@ def _inspect_archive_attempt(
                 "screen_name": manifest["screen_name"],
                 "total_posts": total_posts,
                 "last_successful_sync_at": manifest["last_successful_sync_at"],
+                "history_complete": meta_state["history_complete"],
+                "history_cutoff": meta_state["history_cutoff"],
+                "output_formats": meta_state["output_formats"],
+                "book_format_version": _detect_book_format(
+                    selected, meta_state["book_format_version"]
+                ),
             }
             if current_uid is not None and manifest["uid"] != current_uid:
                 return _result(
@@ -606,6 +794,8 @@ def _inspect_archive_attempt(
         _close_sources(sources)
         if data_fd is not None:
             os.close(data_fd)
+        if assets_fd is not None:
+            os.close(assets_fd)
         if root_fd is not None:
             os.close(root_fd)
 
@@ -629,7 +819,18 @@ def _inspect_archive_path_attempt(
         )
 
     root_identity = _identity(selected_stat)
-    data_path = selected / "data"
+    assets_path = selected / ASSETS_DIR_NAME
+    assets_stat = _lstat_path(assets_path)
+    if assets_stat is not None:
+        if stat.S_ISLNK(assets_stat.st_mode):
+            raise _ArchiveSymlinkError(ASSETS_DIR_NAME)
+        if not stat.S_ISDIR(assets_stat.st_mode):
+            raise _ArchiveMarkerTypeError(ASSETS_DIR_NAME)
+        assets_identity = _identity(assets_stat)
+        data_path = assets_path / DATA_DIR_NAME
+    else:
+        assets_identity = None
+        data_path = selected / "data"
     try:
         entries = tuple(selected.iterdir())
     except FileNotFoundError as exc:
@@ -639,10 +840,13 @@ def _inspect_archive_path_attempt(
             raise _SnapshotChanged("归档根目录已变化")
         return _result("empty", selected)
 
-    manifest_path = selected / MANIFEST_NAME
-    manifest_stat = _lstat_path(manifest_path)
+    manifest_stat = None
+    manifest_path = data_path / MANIFEST_NAME
+    if assets_stat is None:
+        manifest_path = selected / MANIFEST_NAME
+        manifest_stat = _lstat_path(manifest_path)
     data_stat = _lstat_path(data_path)
-    if manifest_stat is None and data_stat is None:
+    if assets_stat is None and manifest_stat is None and data_stat is None:
         legacy_path = selected / INDEX_FILENAME
         legacy_stat = _lstat_path(legacy_path)
         if legacy_stat is not None:
@@ -672,10 +876,10 @@ def _inspect_archive_path_attempt(
             raise _ArchiveMarkerTypeError(MANIFEST_NAME)
     if data_stat is not None:
         if stat.S_ISLNK(data_stat.st_mode):
-            raise _ArchiveSymlinkError("data")
+            raise _ArchiveSymlinkError(data_path.name)
         if not stat.S_ISDIR(data_stat.st_mode):
-            raise _ArchiveMarkerTypeError("data")
-    if manifest_stat is None or data_stat is None:
+            raise _ArchiveMarkerTypeError(data_path.name)
+    if data_stat is None or (assets_stat is None and manifest_stat is None):
         if not _path_root_is_unchanged(selected, root_identity):
             raise _SnapshotChanged("归档根目录已变化")
         return _result(
@@ -685,6 +889,26 @@ def _inspect_archive_path_attempt(
         )
 
     data_identity = _identity(data_stat)
+    if assets_stat is not None:
+        manifest_stat = _lstat_path(manifest_path)
+        if manifest_stat is None:
+            if not _path_snapshot_unchanged(
+                (),
+                selected,
+                root_identity,
+                data_path,
+                data_identity,
+                data_path / f"{DATABASE_NAME}-wal",
+                wal_was_absent=_lstat_path(data_path / f"{DATABASE_NAME}-wal") is None,
+                assets_path=assets_path,
+                assets_identity=assets_identity,
+            ):
+                raise _SnapshotChanged("归档数据目录已变化")
+            return _result("damaged", selected, message="归档清单与归档数据库不完整")
+        if stat.S_ISLNK(manifest_stat.st_mode):
+            raise _ArchiveSymlinkError(MANIFEST_NAME)
+        if not stat.S_ISREG(manifest_stat.st_mode):
+            raise _ArchiveMarkerTypeError(MANIFEST_NAME)
     database_path = data_path / DATABASE_NAME
     database_stat = _lstat_path(database_path)
     wal_path = data_path / f"{DATABASE_NAME}-wal"
@@ -697,6 +921,8 @@ def _inspect_archive_path_attempt(
             data_identity,
             wal_path,
             wal_was_absent=_lstat_path(wal_path) is None,
+            assets_path=assets_path if assets_stat is not None else None,
+            assets_identity=assets_identity,
         ):
             raise _SnapshotChanged("归档数据目录已变化")
         return _result("damaged", selected, message="归档清单与归档数据库不完整")
@@ -722,6 +948,12 @@ def _inspect_archive_path_attempt(
         pending_result: ArchiveFolderInspection | None = None
         manifest: dict | None = None
         total_posts = 0
+        meta_state: dict[str, object] = {
+            "history_complete": True,
+            "history_cutoff": "",
+            "output_formats": {"pdf": False, "markdown": False},
+            "book_format_version": None,
+        }
         try:
             manifest = _read_manifest(manifest_bytes)
         except (UnicodeError, json.JSONDecodeError, TypeError, ValueError):
@@ -735,6 +967,7 @@ def _inspect_archive_path_attempt(
                 connection, total_posts = _validate_database(
                     temporary_root / DATABASE_NAME
                 )
+                meta_state = _read_archive_meta_state(connection)
             except _IntegrityCheckFailed:
                 pending_result = _result(
                     "damaged",
@@ -757,6 +990,8 @@ def _inspect_archive_path_attempt(
             data_identity,
             wal_path,
             wal_was_absent,
+            assets_path=assets_path if assets_stat is not None else None,
+            assets_identity=assets_identity,
         ):
             raise _SnapshotChanged("归档文件已变化")
         if pending_result is not None:
@@ -768,6 +1003,12 @@ def _inspect_archive_path_attempt(
             "screen_name": manifest["screen_name"],
             "total_posts": total_posts,
             "last_successful_sync_at": manifest["last_successful_sync_at"],
+            "history_complete": meta_state["history_complete"],
+            "history_cutoff": meta_state["history_cutoff"],
+            "output_formats": meta_state["output_formats"],
+            "book_format_version": _detect_book_format(
+                selected, meta_state["book_format_version"]
+            ),
         }
         if current_uid is not None and manifest["uid"] != current_uid:
             return _result(
@@ -830,16 +1071,54 @@ def archive_folder_name(screen_name: str, uid: str) -> str:
     return f"{cleaned}_{uid}"
 
 
+LEGACY_SELF_ARCHIVE_NAME = "我的微博"
+
+
+def rename_legacy_self_archive(
+    selected: str | Path,
+    *,
+    inspector: Callable[..., ArchiveFolderInspection] = inspect_archive_folder,
+) -> str:
+    """把旧版「我的微博」档案文件夹改名为「昵称_UID」。
+
+    只在文件夹名严格等于旧名、清单可解析且目标名未被占用时改名；任何
+    一步不满足都原样返回，绝不合并或覆盖已有目录。
+    """
+    folder = Path(selected)
+    if folder.name != LEGACY_SELF_ARCHIVE_NAME or not folder.is_dir():
+        return str(folder)
+    try:
+        inspection = inspector(str(folder), current_uid=None)
+    except Exception:
+        return str(folder)
+    if (
+        inspection.state != "archive"
+        or not inspection.uid
+        or not inspection.screen_name
+    ):
+        return str(folder)
+    target = folder.parent / archive_folder_name(
+        inspection.screen_name, inspection.uid
+    )
+    if target == folder or target.exists():
+        return str(folder)
+    try:
+        folder.rename(target)
+    except OSError:
+        return str(folder)
+    return str(target)
+
+
 def find_child_archives(
     selected: str | Path,
-    uid: str,
+    uid: str | None,
     *,
     inspector: Callable[..., ArchiveFolderInspection] = inspect_archive_folder,
 ) -> list[ArchiveFolderInspection]:
-    """在所选目录的直接子文件夹里按清单 UID 找本账号的已有微博书（只读）。
+    """在所选目录的直接子文件夹里按清单 UID 找已有微博书（只读）。
 
-    不按文件夹名匹配（用户可能改名），只看清单里的 UID；跳过隐藏目录和
-    没有归档清单的目录。
+    不按文件夹名匹配（用户可能改名），只看清单里的 UID；``uid`` 为 None
+    时不限归属，列出全部微博书。跳过隐藏目录和没有归档清单的目录。
     """
     selected_path = Path(selected)
     try:
@@ -855,7 +1134,12 @@ def find_child_archives(
         return []
     found: list[ArchiveFolderInspection] = []
     for child in children:
-        if child.name.startswith(".") or not (child / MANIFEST_NAME).is_file():
+        if child.name.startswith("."):
+            continue
+        if not (
+            (child / MANIFEST_NAME).is_file()
+            or (child / ASSETS_DIR_NAME / DATA_DIR_NAME / MANIFEST_NAME).is_file()
+        ):
             continue
         inspection = inspector(child, current_uid=uid)
         if inspection.state == "archive":
@@ -877,6 +1161,7 @@ def resolve_archive_dir(
     找本账号的已有微博书，找到唯一一个就续用；都没有时以 ``{昵称}_{UID}``
     子文件夹作为新建目标，避免档案文件和用户其它文件混在同一层。
     """
+    selected = rename_legacy_self_archive(selected, inspector=inspector)
     selected_path = Path(selected)
     inspection = inspector(selected, current_uid=uid)
     if inspection.state in {"archive", "legacy_index", "uid_mismatch", "damaged"}:
@@ -919,6 +1204,7 @@ def inspect_selected_folder(
     普通非空目录下若唯一存在本账号微博书子文件夹，返回该子文件夹的检查
     结果，让用户再次选择同一个父目录时直接续上已有微博书。
     """
+    selected = rename_legacy_self_archive(selected, inspector=inspector)
     inspection = inspector(selected, current_uid=uid)
     if inspection.state != "ordinary_nonempty":
         return inspection

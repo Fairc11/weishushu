@@ -70,7 +70,7 @@ if defined ISCC (
   echo [IS] Found: %ISCC%
   REM B06 v1.2.0: 从 backend/app/version.py 读 VERSION 作为 MyAppVersion 传入
   REM 走 scripts\read_version.py（避免 cmd 嵌套引号地狱）
-  set "MY_VER=2.0.1"
+  set "MY_VER=2.2.0"
   for /f "delims=" %%v in ('python scripts\read_version.py') do set "MY_VER=%%v"
   echo [IS] MyAppVersion=!MY_VER!
   "%ISCC%" /DMyAppVersion=!MY_VER! installer.iss

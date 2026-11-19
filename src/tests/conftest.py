@@ -26,3 +26,12 @@ def isolate_global_persistent_task_store(tmp_path):
         task_manager._gc_timers.clear()
         task_manager._tasks.clear()
         task_manager._persistent_store = original
+
+
+@pytest.fixture(autouse=True)
+def isolate_archive_library_registry(tmp_path, monkeypatch):
+    """书库登记写入每个用例自己的临时目录，避免把临时档案登记进开发版书库。"""
+    from backend.app.services import archive_library
+
+    registry = tmp_path / "app-state" / "archive-library.json"
+    monkeypatch.setattr(archive_library, "_registry_path", lambda: registry)

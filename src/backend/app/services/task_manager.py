@@ -191,6 +191,8 @@ class TaskManager:
         pacing_mode: str = "standard",
         keep_awake_when_plugged: bool = False,
         target_label: str | None = None,
+        video_upgrade_limit: int | str = 0,
+        include_supertopics: bool = False,
     ) -> str:
         if self._persistent_store is None:
             raise WeiboError(
@@ -229,7 +231,8 @@ class TaskManager:
                 pacing_state="standard" if pacing_mode == "standard" else "estimating",
                 pacing_request_kind=None,
                 next_wait_seconds=None,
-                checkpoint={},
+                checkpoint={**({"video_upgrade_limit": video_upgrade_limit} if video_upgrade_limit else {}),
+                            **({"include_supertopics": True} if include_supertopics else {})},
                 target_label=target_label,
             )
             record = TaskRecord(
@@ -549,7 +552,7 @@ class TaskManager:
             "msg": rec.progress_msg,
         })
 
-    async def update_progress_event(self, task_id: str, event: dict) -> None:
+    async def update_progress_event(self, task_id: str, event: dict, *, persist: bool = True) -> None:
         """保存并广播结构化阶段事件，同时保持旧 pct/msg 字段兼容。"""
         rec = self._tasks.get(task_id)
         if rec is None or rec.state not in {"pending", "running"}:
@@ -578,7 +581,8 @@ class TaskManager:
                     persistent_changes["progress_total"] = total
             if isinstance(unit, str) and unit:
                 persistent_changes["progress_unit"] = unit
-            self._persist(rec, **persistent_changes)
+            if persist:
+                self._persist(rec, **persistent_changes)
         await self._broadcast(task_id, {
             "type": "progress",
             "pct": rec.progress_pct,

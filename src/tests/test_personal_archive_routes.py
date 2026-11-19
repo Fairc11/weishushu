@@ -77,6 +77,7 @@ def test_personal_request_models_only_expose_archive_fields():
     assert set(ArchiveInspectRequest.model_fields) == {"output_dir", "target_uid"}
     assert set(PersonalArchiveRequest.model_fields) == {
         "output_dir", "mode", "pacing_mode", "keep_awake_when_plugged", "target_uid",
+        "range_months", "backfill_months", "video_upgrade_limit", "include_supertopics",
     }
     for forbidden in (
         "url", "confirm_uid_mismatch", "post_ids",
@@ -647,6 +648,44 @@ def test_abandon_endpoint_converts_unexpected_cleanup_failure_to_chinese_error(
 
     assert response.status_code == 500
     assert response.json() == {"detail": "放弃未完成部分失败，请查看日志"}
+
+
+def test_abandon_falls_back_to_persistent_identity_when_login_expired(
+    client, tmp_path, monkeypatch,
+):
+    from fastapi import HTTPException
+
+    from backend.app.routers import router_tasks
+
+    task_id = asyncio.run(
+        task_manager.create_personal_archive(
+            mode="create",
+            output_dir=str((tmp_path / "微博书").resolve()),
+            expected_uid="1000000003",
+        )
+    )
+    record = task_manager.get(task_id)
+    assert record is not None
+    record.state = "waiting_resume"
+    task_manager._persist(record, state="waiting_resume")
+
+    def expired():
+        raise HTTPException(status_code=401, detail="[认证]cookie 已过期，登录态失效")
+
+    monkeypatch.setattr(router_tasks, "_current_identity", expired)
+    captured: dict[str, str] = {}
+
+    async def fake_abandon(_task_id, identity):
+        captured.update(identity)
+        return True
+
+    monkeypatch.setattr(router_tasks.personal_archive_tasks, "abandon", fake_abandon)
+
+    response = client.post(f"/api/tasks/{task_id}/abandon")
+
+    assert response.status_code == 200
+    assert response.json() == {"task_id": task_id, "state": "abandoned"}
+    assert captured == {"uid": "1000000003", "screen_name": "1000000003"}
 
 
 def test_lifespan_restores_interrupted_task_without_building_network_dependencies(

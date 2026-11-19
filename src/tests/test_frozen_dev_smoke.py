@@ -217,11 +217,11 @@ class SettingsOutputDirSmokeTests(unittest.TestCase):
             f"dev output_dir 应在 ./output: {out_str}",
         )
 
-    def test_settings_version_is_v2_0_1(self):
-        """当前主线固定：config.Settings().version 应是 v2.0.1。"""
+    def test_settings_version_is_v2_0_2(self):
+        """当前主线固定：config.Settings().version 应是 v2.2.0。"""
         from backend.app.config import Settings
         s = Settings()
-        self.assertEqual(s.version, "2.0.1")
+        self.assertEqual(s.version, "2.2.0")
 
 
 if __name__ == "__main__":
