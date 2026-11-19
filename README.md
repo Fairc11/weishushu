@@ -57,8 +57,8 @@
 
 <table>
   <tr>
-    <td><img src="assets/screenshots/book-grid.png" alt="微博书时间轴三栏" /></td>
-    <td><img src="assets/screenshots/book-detail.png" alt="单条微博详情与评论" /></td>
+    <td><img src="assets/screenshots/reader-grid.png" alt="微博书时间轴三栏" /></td>
+    <td><img src="assets/screenshots/reader-detail.png" alt="单条微博详情与评论" /></td>
   </tr>
   <tr>
     <td align="center">微博书 · 时间目录、正文与资料三栏</td>
